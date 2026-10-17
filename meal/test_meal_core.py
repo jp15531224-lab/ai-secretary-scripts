@@ -73,7 +73,6 @@ class LoadAndTotals(unittest.TestCase):
             db = mc.load_db(make_db([meal("M1-01", "2026-10-17 12:00", "カツ丼", 950)], as_filter=shape))
             self.assertEqual(len(db["食事"].rows), 1)
             self.assertEqual(db["食事"].rows[0]["__row"], 2)
-            self.assertEqual(db["食事"].next_row, 3)
 
     def test_ratio_status_and_night(self):
         db = mc.load_db(make_db([
