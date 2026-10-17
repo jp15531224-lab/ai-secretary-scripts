@@ -341,6 +341,7 @@ JPの短い報告（音声入力の文字起こし・写真）から、食べた
 - target_id は記録一覧の品目ID（例 M20261017-1230-01-02）か食事ID（例 M20261017-1230-01、その食事の全品目）。
 - field: 割合（value は 0〜1 の数字の文字列）/ 日時（value は 'YYYY-MM-DD HH:MM'）/ 状態（value は 取消・本人以外・確定）。
 - 対象が特定できない時は補正せず needs_confirmation に質問を入れる。
+- 補正は「今回のJPの報告」で明示された時だけ出す。直近の記録一覧に既に反映済みの補正（状態が取消の品目など）を繰り返さない。
 
 # 確認候補（candidate_decisions）
 - 「候補1は記録」「候補2は不要」等。候補番号は一覧の番号。decision は 記録 か 不要。
@@ -349,9 +350,12 @@ JPの短い報告（音声入力の文字起こし・写真）から、食べた
 - 「体重77.6」等。date は集計日（言及が無ければ空文字）。無ければ kg は null。
 
 # 質問への回答（answer）
-- 「今日何カロリー？」「あと何カロリー？」は answer を空文字にする（システムが最新の集計を自動で付ける）。
+- 今日の合計・残り・塩分・栄養素・栄養状態の質問（「今日何カロリー？」「あと何カロリー？」「今日の塩分は？」等）は answer を空文字にする（システムが最新の集計を自動で付ける）。評価が欲しそうな時は advice に1文だけ書く。
 - 「昨日は食べすぎた？」「今週の平均は？」等は、渡された日別集計だけを使って2〜4行で答える。単日でなく週平均で判断する。記録の無い日は推測しない。体重記録が無ければ体重変化を断定しない。
 - 食事の判断は参考情報であり医療上の診断ではない。
+
+# 飲酒の目安
+- 節度ある適度な飲酒は純アルコールで1日平均約20g程度（厚生労働省の目安。ビール中瓶1本≒20g）。超えている日に「適度」と言わない。説教はせず事実と次の工夫だけ伝える。
 
 # 一言アドバイス（advice）
 - 今日の記録・残りカロリー・塩分を踏まえ、次の食事で実行できることを1〜2文。不要なら空文字。説教調にしない。
@@ -611,10 +615,12 @@ def apply(db, result, now, text="", source="ショートカット", photo_hash="
             else:
                 notes.append(f"補正「{field}={value}」は扱えないため反映していません。")
                 break
+            changes = {col: new for col, new in changes.items() if str(row.get(col)) != str(new)}
+            if not changes:
+                continue  # 既に同じ値（AIが過去の補正を繰り返した等）→ 何もしない
             for col, new in changes.items():
-                if str(row.get(col)) != str(new):
-                    w.append("補正履歴", {"日時": stamp, "品目ID": row["品目ID"], "項目": col, "旧値": row.get(col, ""),
-                                       "新値": new, "元の発言": said, "情報源": source})
+                w.append("補正履歴", {"日時": stamp, "品目ID": row["品目ID"], "項目": col, "旧値": row.get(col, ""),
+                                   "新値": new, "元の発言": said, "情報源": source})
             changes["更新日時"] = stamp
             w.update("食事", row, changes)
             notes.append(f"補正: {row['品名']} → " + "、".join(f"{k}={v}" for k, v in changes.items() if k != "更新日時"))

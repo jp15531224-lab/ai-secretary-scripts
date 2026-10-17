@@ -171,6 +171,13 @@ class Apply(unittest.TestCase):
         row = db["食事"].find("品目ID", "M1-01")[0]
         self.assertEqual(row["集計日"], "2026-10-16")
 
+    def test_amend_noop_is_ignored(self):
+        db_dict = make_db([meal("M1-01", "2026-10-17 12:00", "おにぎり", 180, status="取消")])
+        _, w, _, notes, _ = self.run_apply(db_dict, result(amendments=[
+            {"target_id": "M1-01", "field": "状態", "value": "取消", "reason": ""}]))
+        self.assertIsNone(w.body())
+        self.assertEqual(notes, [])
+
     def test_amend_unknown_target(self):
         _, w, _, notes, _ = self.run_apply(make_db(), result(amendments=[
             {"target_id": "M9", "field": "割合", "value": "0.5", "reason": ""}]))
