@@ -22,6 +22,8 @@ SPREADSHEET_ID = "1AzcV_y0rbwGPbGAyGLbriAq57k7QWRrDYgrRsxYO-W0"   # iCloud外部
 REPO_RAW = "https://raw.githubusercontent.com/jp15531224-lab/ai-secretary-scripts"
 SHEET_RANGES = ["'食事'!A1:Y", "'補正履歴'!A1:G", "'確認候補'!A1:W", "'体重'!A1:E", "'設定'!A1:C"]
 JSON_HEADER = [{"key": "Content-Type", "value": "application/json"}]
+HEADER_TOKEN = '{{get(map(1.__IMTHEADERS__; "value"; "name"; "x-meal-token"); 1)}}'
+IS_GPT = '1.source = "ChatGPT"'  # ChatGPT には JSON {"reply": ...} で返す
 
 
 def pos(x, y=0):
@@ -56,7 +58,10 @@ def blueprint(token, commit):
         {"id": 1, "module": "gateway:CustomWebHook", "version": 1,
          "parameters": {"hook": HOOK_ID, "maxResults": 1}, "mapper": {}, "metadata": pos(0)},
         {"id": 2, "module": "http:ActionSendData", "version": 3, "parameters": {"handleErrors": True},
-         "filter": {"name": "合言葉が一致", "conditions": [[{"a": "{{1.token}}", "o": "text:equal", "b": token}]]},
+         # 合言葉は本文の token（ショートカット等）か、ヘッダー x-meal-token（ChatGPT の GPT アクション）のどちらか
+         "filter": {"name": "合言葉が一致", "conditions": [
+             [{"a": "{{1.token}}", "o": "text:equal", "b": token}],
+             [{"a": HEADER_TOKEN, "o": "text:equal", "b": token}]]},
          "mapper": {"url": f"{REPO_RAW}/{commit}/meal/dist/make_code.py", "method": "get", "headers": [], "qs": [],
                     "bodyType": "", "parseResponse": False, "serializeUrl": False, "shareCookies": False,
                     "rejectUnauthorized": True, "followRedirect": True, "followAllRedirects": False,
@@ -79,8 +84,10 @@ def blueprint(token, commit):
                                    {"name": "書き込みあり",
                                     "conditions": [[{"a": "{{6.result.has_writes}}", "o": "boolean:equal", "b": "true"}]]})]},
              {"flow": [{"id": 9, "module": "gateway:WebhookRespond", "version": 1, "parameters": {},
-                        "mapper": {"status": 200, "body": "{{6.result.reply}}",
-                                   "headers": [{"key": "Content-Type", "value": "text/plain; charset=utf-8"}]},
+                        "mapper": {"status": 200,
+                                   "body": f"{{{{if({IS_GPT}; 6.result.reply_json; 6.result.reply)}}}}",
+                                   "headers": [{"key": "Content-Type", "value":
+                                                f'{{{{if({IS_GPT}; "application/json; charset=utf-8"; "text/plain; charset=utf-8")}}}}'}]},
                         "metadata": pos(2100, 150)}]},
          ]},
     ]

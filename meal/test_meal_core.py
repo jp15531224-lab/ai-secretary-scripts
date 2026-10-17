@@ -248,6 +248,7 @@ class ReplyAndRequest(unittest.TestCase):
         nometa = mc.handle({"mode": "apply", "db": dbj, "openai": openai_body(result(new_items=[item("カツ丼", 950)]))})
         self.assertFalse(nometa["has_writes"])
         self.assertIn("カツ丼", out["reply"])
+        self.assertEqual(json.loads(out["reply_json"])["reply"], out["reply"])
         bad = mc.handle({"mode": "apply", "db": dbj, "openai": {"choices": [{"message": {"content": "not json"}}]}})
         self.assertFalse(bad["has_writes"])
         q = mc.handle({"mode": "apply", "db": dbj, "now": "2026-10-17 21:00", "meta": meta,

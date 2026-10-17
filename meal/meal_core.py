@@ -753,8 +753,9 @@ def handle(inp):
                     "reply": f"⚠ 食事DBのシートが見つかりません（{'、'.join(missing)}）。記録していません。"}
         w, recorded, notes, warns = apply(db, result, now, text, src, image_hash(image), sheet_ids)
         body = w.body()
+        reply = compose_reply(db, now, result, recorded, notes, warns)
         return {"has_writes": bool(body), "write_body": json.dumps(body, ensure_ascii=False) if body else "",
-                "reply": compose_reply(db, now, result, recorded, notes, warns), "version": VERSION}
+                "reply": reply, "reply_json": json.dumps({"reply": reply}, ensure_ascii=False), "version": VERSION}
     if mode == "summary":
         return {"reply": "\n".join(summary_text(db, now) + candidate_lines(db) + [DISCLAIMER])}
     return {"error": f"unknown mode: {mode}"}
