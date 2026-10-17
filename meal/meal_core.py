@@ -218,7 +218,6 @@ class Table:
             row = {c: (raw[j] if j < len(raw) else "") for j, c in enumerate(cols)}
             row["__row"] = i
             self.rows.append(row)
-        self.next_row = max([len(values) + 1, 2] + [r["__row"] + 1 for r in self.rows])
 
     def find(self, col, value):
         return [r for r in self.rows if str(r.get(col, "")) == str(value)]
@@ -466,38 +465,50 @@ def parse_openai_response(body):
 
 # ---------------------------------------------------------------- 適用（書き込み内容と返答文）
 class Writer:
-    def __init__(self, db):
-        self.db = db
-        self.data = []
-        self.next_row = {name: t.next_row for name, t in db.items()}
+    """書き込み内容を Sheets の spreadsheets:batchUpdate 本文にまとめる。
+    追加は appendCells（シート末尾への追加。ほぼ同時に2件届いても行が上書きされない）、
+    既存行の補正は updateCells（行は削除・移動しないので行番号は変わらない）。"""
 
-    def _col_letter(self, n):
-        s = ""
-        while n:
-            n, rem = divmod(n - 1, 26)
-            s = chr(65 + rem) + s
-        return s
+    def __init__(self, db, sheet_ids):
+        self.db = db
+        self.sheet_ids = sheet_ids
+        self.requests = []
+
+    @staticmethod
+    def _cell(value):
+        if isinstance(value, bool):
+            return {"userEnteredValue": {"stringValue": str(value)}}
+        if isinstance(value, (int, float)):
+            return {"userEnteredValue": {"numberValue": value}}
+        return {"userEnteredValue": {"stringValue": "" if value is None else str(value)}}
 
     def append(self, sheet, row_dict):
-        cols = SHEETS[sheet]
-        r = self.next_row[sheet]
-        self.next_row[sheet] += 1
-        values = [row_dict.get(c, "") for c in cols]
-        self.data.append({"range": f"'{sheet}'!A{r}:{self._col_letter(len(cols))}{r}", "values": [values]})
+        values = [self._cell(row_dict.get(c, "")) for c in SHEETS[sheet]]
+        self.requests.append({"appendCells": {"sheetId": self.sheet_ids[sheet], "rows": [{"values": values}],
+                                              "fields": "userEnteredValue"}})
         row = dict(row_dict)
-        row["__row"] = r
+        row["__row"] = None  # 末尾に追加（行番号は書き込み時に決まる）
         self.db[sheet].rows.append(row)  # 返答の集計に反映させる
         return row
 
     def update(self, sheet, row, changes):
         cols = SHEETS[sheet]
         for col, value in changes.items():
-            c = self._col_letter(cols.index(col) + 1)
-            self.data.append({"range": f"'{sheet}'!{c}{row['__row']}", "values": [[value]]})
+            if row.get("__row"):
+                self.requests.append({"updateCells": {
+                    "start": {"sheetId": self.sheet_ids[sheet], "rowIndex": row["__row"] - 1,
+                              "columnIndex": cols.index(col)},
+                    "rows": [{"values": [self._cell(value)]}], "fields": "userEnteredValue"}})
             row[col] = value
 
     def body(self):
-        return {"valueInputOption": "RAW", "data": self.data} if self.data else None
+        return {"requests": self.requests} if self.requests else None
+
+
+def load_sheet_ids(meta):
+    """GET spreadsheets/{id}?fields=sheets.properties の応答 → {シート名: sheetId}"""
+    meta = jload(meta)
+    return {sh["properties"]["title"]: sh["properties"]["sheetId"] for sh in meta.get("sheets", [])}
 
 
 def _clean_item(it):
@@ -520,9 +531,9 @@ def image_hash(image_b64):
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
-def apply(db, result, now, text="", source="ショートカット", photo_hash=""):
+def apply(db, result, now, text="", source="ショートカット", photo_hash="", sheet_ids=None):
     """LLM の構造化結果を検証して DB に反映する書き込みを作る。戻り値: (Writer, 報告行のリスト)"""
-    w = Writer(db)
+    w = Writer(db, sheet_ids or {name: i for i, name in enumerate(SHEETS)})
     notes, recorded, warns = [], [], []
     stamp = fmt_dt(now)
     said = (text or "").strip()[:300]
@@ -729,7 +740,12 @@ def handle(inp):
             return {"has_writes": False, "write_body": "",
                     "reply": f"⚠ 解析結果を読めませんでした（{type(e).__name__}）。記録していません。もう一度送ってください。"}
         src = inp.get("source") or ("写真" if image else "ショートカット")
-        w, recorded, notes, warns = apply(db, result, now, text, src, image_hash(image))
+        sheet_ids = load_sheet_ids(inp.get("meta"))
+        missing = [name for name in SHEETS if name not in sheet_ids]
+        if missing:
+            return {"has_writes": False, "write_body": "",
+                    "reply": f"⚠ 食事DBのシートが見つかりません（{'、'.join(missing)}）。記録していません。"}
+        w, recorded, notes, warns = apply(db, result, now, text, src, image_hash(image), sheet_ids)
         body = w.body()
         return {"has_writes": bool(body), "write_body": json.dumps(body, ensure_ascii=False) if body else "",
                 "reply": compose_reply(db, now, result, recorded, notes, warns), "version": VERSION}

@@ -8,8 +8,9 @@
   （既存の定期ジョブと同じ方式。後から改ざんされても固定したコミット以外は実行されない）。
   コードを直したら: テスト → dist 再生成 → push → 新しいコミットSHAで設計図を作り直して scenarios_update。
 
-流れ: Webhook →(合言葉確認) コード取得 → 食事DBを全部読む → Python(prepare) → OpenAI → Python(apply)
-      → ルーター［書き込みがあれば Sheets へ］→［返答］
+流れ: Webhook →(合言葉確認) コード取得 → 食事DBを全部読む → シートID取得 → Python(prepare) → OpenAI → Python(apply)
+      → ルーター［書き込みがあれば Sheets へ（追加は appendCells なので同時送信でも上書きしない）］→［返答］
+- 「1件ずつ順番に処理」(sequential)をオンにすると Make が即「Accepted」を返して返答が届かないため、オフにしている。
 """
 import argparse
 import json
@@ -38,8 +39,9 @@ def code_module(mid, mode, extra, x):
 
 
 def sheets_call(mid, path, body, x, y=0, flt=None):
+    url = f"spreadsheets/{SPREADSHEET_ID}" + (path if path.startswith(":") else "/" + path)
     m = {"id": mid, "module": "google-sheets:makeAPICall", "version": 2, "parameters": {"__IMTCONN__": SHEETS_CONN},
-         "mapper": {"url": f"spreadsheets/{SPREADSHEET_ID}/{path}", "method": "POST", "headers": JSON_HEADER,
+         "mapper": {"url": url, "method": "POST", "headers": JSON_HEADER,
                     "qs": [], "body": body},
          "metadata": pos(x, y)}
     if flt:
@@ -61,15 +63,19 @@ def blueprint(token, commit):
                     "useQuerystring": False, "gzip": True, "useMtls": False},
          "metadata": pos(300)},
         sheets_call(3, "values:batchGetByDataFilter", read_body, 600),
+        {"id": 10, "module": "google-sheets:makeAPICall", "version": 2, "parameters": {"__IMTCONN__": SHEETS_CONN},
+         "mapper": {"url": f"spreadsheets/{SPREADSHEET_ID}", "method": "GET", "headers": [],
+                    "qs": [{"key": "fields", "value": "sheets.properties(sheetId,title)"}], "body": ""},
+         "metadata": pos(750, 150)},
         code_module(4, "prepare", [], 900),
         {"id": 5, "module": "openai-gpt-3:makeApiCall", "version": 1, "parameters": {"__IMTCONN__": OPENAI_CONN},
          "mapper": {"url": "/v1/chat/completions", "method": "POST", "headers": JSON_HEADER, "qs": [],
                     "body": "{{4.result.request_body}}"},
          "metadata": pos(1200)},
-        code_module(6, "apply", [{"name": "openai", "value": "{{5.body}}"}], 1500),
+        code_module(6, "apply", [{"name": "openai", "value": "{{5.body}}"}, {"name": "meta", "value": "{{10.body}}"}], 1500),
         {"id": 7, "module": "builtin:BasicRouter", "version": 1, "mapper": None, "metadata": pos(1800),
          "routes": [
-             {"flow": [sheets_call(8, "values:batchUpdate", "{{6.result.write_body}}", 2100, -150,
+             {"flow": [sheets_call(8, ":batchUpdate", "{{6.result.write_body}}", 2100, -150,
                                    {"name": "書き込みあり",
                                     "conditions": [[{"a": "{{6.result.has_writes}}", "o": "boolean:equal", "b": "true"}]]})]},
              {"flow": [{"id": 9, "module": "gateway:WebhookRespond", "version": 1, "parameters": {},
@@ -81,7 +87,7 @@ def blueprint(token, commit):
     return {"name": "食事管理：記録・質問（iPhoneショートカット）", "flow": flow,
             "metadata": {"instant": True, "version": 1,
                          "scenario": {"roundtrips": 1, "maxErrors": 3, "autoCommit": True, "autoCommitTriggerLast": True,
-                                      "sequential": True, "confidential": True, "dataloss": False, "dlq": False,
+                                      "sequential": False, "confidential": True, "dataloss": False, "dlq": False,
                                       "freshVariables": False},
                          "designer": {"orphans": []}}}
 

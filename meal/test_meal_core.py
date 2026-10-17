@@ -109,11 +109,12 @@ class Apply(unittest.TestCase):
         self.assertEqual(len(rec), 2)
         self.assertEqual(rec[0]["食事ID"], rec[1]["食事ID"])
         self.assertEqual([r["品目ID"][-2:] for r in rec], ["01", "02"])
-        body = w.body()
-        self.assertEqual(body["valueInputOption"], "RAW")
-        self.assertEqual(body["data"][0]["range"], "'食事'!A2:Y2")
-        self.assertEqual(body["data"][1]["range"], "'食事'!A3:Y3")
-        self.assertEqual(len(body["data"][0]["values"][0]), len(mc.MEAL_COLS))
+        reqs = w.body()["requests"]
+        self.assertEqual([list(r) for r in reqs], [["appendCells"], ["appendCells"]])
+        cells = reqs[0]["appendCells"]["rows"][0]["values"]
+        self.assertEqual(len(cells), len(mc.MEAL_COLS))
+        self.assertEqual(cells[mc.MEAL_COLS.index("集計日")], {"userEnteredValue": {"stringValue": "2026-10-17"}})
+        self.assertEqual(cells[mc.MEAL_COLS.index("kcal目安")], {"userEnteredValue": {"numberValue": 300}})
 
     def test_late_night_goes_to_previous_day(self):
         now = datetime(2026, 10, 18, 10, 0, tzinfo=mc.JST)
@@ -154,9 +155,10 @@ class Apply(unittest.TestCase):
         db, w, rec, notes, _ = self.run_apply(db_dict, result(intent="補正", amendments=[
             {"target_id": "M1-01", "field": "割合", "value": "0.5", "reason": "刺身は半分"}]), "刺身は半分、天ぷらは全部")
         self.assertEqual(rec, [])
-        ranges = [d["range"] for d in w.body()["data"]]
-        self.assertIn("'補正履歴'!A2:G2", ranges)
-        self.assertIn("'食事'!I2", ranges)
+        reqs = w.body()["requests"]
+        self.assertTrue(any("appendCells" in r and r["appendCells"]["sheetId"] == 1 for r in reqs))  # 補正履歴
+        upd = [r["updateCells"]["start"] for r in reqs if "updateCells" in r]
+        self.assertIn({"sheetId": 0, "rowIndex": 1, "columnIndex": mc.MEAL_COLS.index("食べた割合")}, upd)
         self.assertAlmostEqual(mc.day_totals(db, "2026-10-17")["kcal"], 100 + 500)
 
     def test_amend_whole_meal_status_and_time(self):
@@ -230,15 +232,20 @@ class ReplyAndRequest(unittest.TestCase):
 
     def test_handle_round_trip(self):
         dbj = json.dumps(make_db(as_filter=True), ensure_ascii=False)
+        meta = {"sheets": [{"properties": {"title": n, "sheetId": 100 + i}} for i, n in enumerate(mc.SHEETS)]}
         prep = mc.handle({"mode": "prepare", "db": dbj, "text": "カツ丼食べた", "now": "2026-10-17 21:00"})
         self.assertIn("gpt", json.loads(prep["request_body"])["model"])
-        out = mc.handle({"mode": "apply", "db": dbj, "text": "カツ丼食べた", "now": "2026-10-17 21:00",
+        out = mc.handle({"mode": "apply", "db": dbj, "text": "カツ丼食べた", "now": "2026-10-17 21:00", "meta": meta,
                          "openai": openai_body(result(new_items=[item("カツ丼", 950, salt=4)]))})
         self.assertTrue(out["has_writes"])
+        self.assertEqual(json.loads(out["write_body"])["requests"][0]["appendCells"]["sheetId"], 100)
+        nometa = mc.handle({"mode": "apply", "db": dbj, "openai": openai_body(result(new_items=[item("カツ丼", 950)]))})
+        self.assertFalse(nometa["has_writes"])
         self.assertIn("カツ丼", out["reply"])
         bad = mc.handle({"mode": "apply", "db": dbj, "openai": {"choices": [{"message": {"content": "not json"}}]}})
         self.assertFalse(bad["has_writes"])
-        q = mc.handle({"mode": "apply", "db": dbj, "now": "2026-10-17 21:00", "openai": openai_body(result(intent="質問"))})
+        q = mc.handle({"mode": "apply", "db": dbj, "now": "2026-10-17 21:00", "meta": meta,
+                       "openai": openai_body(result(intent="質問"))})
         self.assertFalse(q["has_writes"])
         self.assertIn("まだ記録がありません", q["reply"])
 
