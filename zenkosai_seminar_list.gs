@@ -14,7 +14,7 @@
  *
  * 取り込み:
  *   一覧と同じフォルダの「取り込み待ち」フォルダに CSV（上と同じ列順、1行目は見出し）を置くと、
- *   1時間ごとの処理で一覧に反映し、CSV は「取り込み済み」フォルダへ移す。
+ *   1分ごとに確認して一覧に反映し（置いてから1分ほどで使える）、CSV は「取り込み済み」フォルダへ移す。
  *   同じ回（開催日＋開始時刻＋種別＋講師名）が既にあれば、新しい内容で上書きする（中止の反映など）。
  *
  * 入れ替え（撮り直し用）:
@@ -63,16 +63,22 @@ function setup() {
   ScriptApp.getProjectTriggers()
     .filter(t => t.getHandlerFunction() === 'daily')
     .forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('daily').timeBased().everyHours(1).create();
+  ScriptApp.newTrigger('daily').timeBased().everyMinutes(1).create();
 
   daily();
 }
 
+// 1分ごとに動く。CSVが無い時は取り込み待ちを見るだけで終わり、
+// 古い月の削除と並べ替えは「取り込みがあった時」と「1日1回」だけ行う（実行時間の上限対策）。
 function daily() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  importInbox_(ss);
+  const props = PropertiesService.getScriptProperties();
+  const today = Utilities.formatDate(new Date(), TZ, 'yyyyMMdd');
+  const imported = importInbox_(ss);
+  if (!imported && props.getProperty('LAST_MAINT') === today) return;
   pruneOld_(ss);
   sortAndFormat_(ss);
+  props.setProperty('LAST_MAINT', today);
 }
 
 function importInbox_(ss) {
@@ -80,7 +86,7 @@ function importInbox_(ss) {
   const inbox = getSubFolder_(ss, INBOX_FOLDER);
   const done = getSubFolder_(ss, DONE_FOLDER);
   const files = inbox.getFiles();
-  if (!files.hasNext()) return;
+  if (!files.hasNext()) return false;
 
   const list = [];
   while (files.hasNext()) {
@@ -110,6 +116,7 @@ function importInbox_(ss) {
     file.moveTo(done);
   });
   writeRows_(sh, rows);
+  return list.length > 0;
 }
 
 // replace__2027-01__BE__ALL.csv → { month: '2027/01', types: ['BE'], prefs: null }
@@ -218,8 +225,8 @@ function writeRules_(ss) {
     ['時間', '上段に開始、下段に終了（セル内改行）'],
     ['開催日', 'yyyy/mm/dd(曜)。年が無い行は自動削除の対象外'],
     ['会場', '中止は「（中止）」を付記。画面で切れた名称は「…※」のまま（推測で補わない）'],
-    ['自動削除', '1時間ごとに実行。月が終わったら、その2ヶ月前の月の行を削除（例：12/1に9月以前を削除）'],
-    ['取り込み', '「' + INBOX_FOLDER + '」フォルダに同じ列順のCSVを置くと1時間以内に反映し、「' + DONE_FOLDER + '」へ移動'],
+    ['自動削除', '1日1回（取り込み時も）実行。月が終わったら、その2ヶ月前の月の行を削除（例：12/1に9月以前を削除）'],
+    ['取り込み', '「' + INBOX_FOLDER + '」フォルダに同じ列順のCSVを置くと1分ほどで反映し、「' + DONE_FOLDER + '」へ移動'],
     ['重複', '開催日＋開始時刻＋種別＋講師名が同じなら上書き'],
     ['入れ替え', 'ファイル名 replace__年-月__種別__都道府県.csv はその範囲を全部消してから入れる（例 replace__2027-01__BE__ALL.csv）'],
     ['ChatGPT連携の合言葉', PropertiesService.getScriptProperties().getProperty('API_TOKEN') || '（setup実行後に表示）'],
