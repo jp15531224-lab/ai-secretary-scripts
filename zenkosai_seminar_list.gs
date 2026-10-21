@@ -17,7 +17,15 @@
  *   毎日の処理で一覧に追記し、CSV は「取り込み済み」フォルダへ移す。
  *   同じ回（開催日＋開始時刻＋種別＋講師名）が既にあれば、新しい内容で上書きする（中止の反映など）。
  *
+ * ChatGPT連携:
+ *   ウェブアプリとして公開すると、ChatGPT（カスタムGPTのアクション）から
+ *   「PBSだけ」「大阪だけ」「12月分」などの条件で一覧を取得し、PDFも作れる。
+ *   PDFは「PDF出力」フォルダに保存され、共有設定は変えない（本人だけが開ける）。
+ *   呼び出しには合言葉（token）が必要。合言葉は「ルール」シートに表示される。
+ *
  * 初回だけ: このファイルの中身を「拡張機能 → Apps Script」に貼り付け → setup を実行 → 権限を許可。
+ * ChatGPT連携: デプロイ → 新しいデプロイ → ウェブアプリ（実行ユーザー：自分／アクセス：全員）
+ *   → 表示されたURLを「ChatGPT設定」シートのB1に貼る → chatgptSettings を実行。
  */
 
 const SHEET_NAME = '一覧';
@@ -28,10 +36,16 @@ const INBOX_FOLDER = '取り込み待ち';
 const DONE_FOLDER = '取り込み済み';
 const TZ = 'Asia/Tokyo';
 const WEEK = ['日', '月', '火', '水', '木', '金', '土'];
+const PDF_FOLDER = 'PDF出力';
+const GPT_SHEET_NAME = 'ChatGPT設定';
+const MAX_ROWS = 300;           // 1回の応答で返す最大件数
 
 function setup() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   ss.setSpreadsheetTimeZone(TZ);
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('SHEET_ID', ss.getId());
+  if (!props.getProperty('API_TOKEN')) props.setProperty('API_TOKEN', Utilities.getUuid().replace(/-/g, ''));
   const sh = getListSheet_(ss);
   sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]).setFontWeight('bold');
   sh.setFrozenRows(1);
@@ -177,9 +191,161 @@ function writeRules_(ss) {
     ['自動削除', '毎日5時に実行。月が終わったら、その2ヶ月前の月の行を削除（例：12/1に9月以前を削除）'],
     ['取り込み', '「' + INBOX_FOLDER + '」フォルダに同じ列順のCSVを置くと毎日追記し、「' + DONE_FOLDER + '」へ移動'],
     ['重複', '開催日＋開始時刻＋種別＋講師名が同じなら上書き'],
+    ['ChatGPT連携の合言葉', PropertiesService.getScriptProperties().getProperty('API_TOKEN') || '（setup実行後に表示）'],
   ];
   sh.clearContents();
   sh.getRange(1, 1, rules.length, 2).setValues(rules);
   sh.getRange(1, 1, 1, 2).setFontWeight('bold');
   sh.autoResizeColumns(1, 2);
+}
+
+// ===== ChatGPT連携（ウェブアプリ） =====
+// 例）?token=xxx&type=PBS&pref=大阪&month=2026-12&format=pdf
+
+function doGet(e) {
+  const p = (e && e.parameter) || {};
+  const props = PropertiesService.getScriptProperties();
+  if (!p.token || p.token !== props.getProperty('API_TOKEN')) return json_({ error: 'unauthorized' });
+
+  const ss = SpreadsheetApp.openById(props.getProperty('SHEET_ID'));
+  const rows = filterRows_(readRows_(getListSheet_(ss)), p);
+  const items = rows.slice(0, MAX_ROWS).map(toItem_);
+  const res = { count: rows.length, returned: items.length, conditions: describe_(p), items: items };
+  if (p.format === 'pdf') {
+    const file = makePdf_(ss, rows, res.conditions);
+    res.pdf_url = file.getUrl();
+    res.pdf_name = file.getName();
+  }
+  return json_(res);
+}
+
+function filterRows_(rows, p) {
+  const types = splitList_(p.type).map(t => t.toUpperCase());
+  const prefs = splitList_(p.pref);
+  const lecturer = (p.lecturer || '').replace(/\s/g, '');
+  const venue = (p.venue || '').replace(/\s/g, '');
+  const from = p.month ? monthStart_(p.month) : parseDate_(p.from || '');
+  const to = p.month ? monthEnd_(p.month) : parseDate_(p.to || '');
+  const includeCanceled = String(p.include_canceled || 'true') !== 'false';
+  return rows.filter(r => {
+    const d = parseDate_(r[0]);
+    if (from && (!d || d < from)) return false;
+    if (to && (!d || d > to)) return false;
+    if (types.length && types.indexOf(String(r[2]).toUpperCase()) < 0) return false;
+    // 「大阪」「大阪府」どちらでも当たるよう部分一致
+    if (prefs.length && !prefs.some(x => String(r[4]).indexOf(x.replace(/[都道府県]$/, '')) === 0)) return false;
+    if (lecturer && String(r[3]).replace(/\s/g, '').indexOf(lecturer) < 0) return false;
+    if (venue && String(r[5]).replace(/\s/g, '').indexOf(venue) < 0) return false;
+    if (!includeCanceled && String(r[5]).indexOf('（中止）') >= 0) return false;
+    return true;
+  });
+}
+
+function toItem_(r) {
+  const t = String(r[1]).split('\n');
+  return { date: r[0], start: t[0] || '', end: t[1] || '', type: r[2], lecturer: r[3],
+           pref: r[4], venue: r[5], organizer: r[6], canceled: String(r[5]).indexOf('（中止）') >= 0 };
+}
+
+function makePdf_(ss, rows, title) {
+  const esc = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const body = rows.map(r => '<tr>' + [r[0], esc(r[1]).replace('\n', '<br>'), r[2], r[3], r[4], r[5], r[6]]
+    .map((v, i) => '<td' + (i === 1 ? ' class="t"' : '') + '>' + (i === 1 ? v : esc(v)) + '</td>').join('') + '</tr>').join('');
+  const html = '<html><head><meta charset="utf-8"><style>'
+    + 'body{font-family:sans-serif;font-size:9pt}h1{font-size:13pt}'
+    + 'table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:3px 4px;vertical-align:middle}'
+    + 'th{background:#eee}td.t{text-align:center;white-space:nowrap}</style></head><body>'
+    + '<h1>全厚済セミナー一覧（' + esc(title) + '）</h1>'
+    + '<p>' + rows.length + '件　作成：' + Utilities.formatDate(new Date(), TZ, 'yyyy/MM/dd HH:mm') + '</p>'
+    + '<table><tr>' + HEADERS.map(h => '<th>' + h + '</th>').join('') + '</tr>' + body + '</table></body></html>';
+  const name = 'セミナー一覧_' + title.replace(/[\\\/:*?"<>|\s]/g, '_') + '_'
+    + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd_HHmm') + '.pdf';
+  const blob = Utilities.newBlob(html, 'text/html', 'list.html').getAs(MimeType.PDF).setName(name);
+  return getSubFolder_(ss, PDF_FOLDER).createFile(blob);
+}
+
+function describe_(p) {
+  const parts = [];
+  if (p.month) parts.push(p.month.replace('-', '年') + '月');
+  if (p.from || p.to) parts.push((p.from || '') + '〜' + (p.to || ''));
+  if (p.type) parts.push(p.type);
+  if (p.pref) parts.push(p.pref);
+  if (p.lecturer) parts.push('講師:' + p.lecturer);
+  if (p.venue) parts.push('会場:' + p.venue);
+  if (String(p.include_canceled) === 'false') parts.push('中止除く');
+  return parts.length ? parts.join('・') : '全件';
+}
+
+function splitList_(v) {
+  return String(v || '').split(/[,、，\s]+/).filter(Boolean);
+}
+
+function monthStart_(ym) {
+  const m = String(ym).match(/(\d{4})\D+(\d{1,2})/);
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, 1) : null;
+}
+
+function monthEnd_(ym) {
+  const m = String(ym).match(/(\d{4})\D+(\d{1,2})/);
+  return m ? new Date(Number(m[1]), Number(m[2]), 0) : null;
+}
+
+function json_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ウェブアプリのURLを「ChatGPT設定」シートのB1に貼ってから実行すると、
+// カスタムGPTにそのまま貼れる「指示文」と「スキーマ」を作る。
+function chatgptSettings() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(GPT_SHEET_NAME) || ss.insertSheet(GPT_SHEET_NAME);
+  const url = String(sh.getRange('B1').getValue() || '').trim();
+  sh.getRange('A1').setValue('ウェブアプリURL（ここに貼る→）');
+  const m = url.match(/^https:\/\/script\.google\.com(\/macros\/s\/[^\/]+\/exec)/);
+  if (!m) {
+    sh.getRange('A3').setValue('B1にウェブアプリのURL（https://script.google.com/macros/s/…/exec）を貼ってから再実行してください。');
+    return;
+  }
+  const token = PropertiesService.getScriptProperties().getProperty('API_TOKEN');
+  const schema = {
+    openapi: '3.1.0',
+    info: { title: '全厚済セミナー一覧', version: '1.0.0' },
+    servers: [{ url: 'https://script.google.com' }],
+    paths: {},
+  };
+  schema.paths[m[1]] = { get: {
+    operationId: 'searchSeminars',
+    summary: '全厚済セミナー一覧を条件で検索し、必要ならPDFを作る',
+    parameters: [
+      { name: 'token', in: 'query', required: true, schema: { type: 'string', enum: [token] }, description: '合言葉（常にこの値）' },
+      { name: 'type', in: 'query', schema: { type: 'string' }, description: '種別。PBS, BE, BT, コンベンション。複数はカンマ区切り' },
+      { name: 'pref', in: 'query', schema: { type: 'string' }, description: '都道府県。例: 大阪, 兵庫。複数はカンマ区切り' },
+      { name: 'month', in: 'query', schema: { type: 'string' }, description: '対象月 yyyy-mm。例: 2026-12' },
+      { name: 'from', in: 'query', schema: { type: 'string' }, description: '開始日 yyyy/mm/dd（monthと併用しない）' },
+      { name: 'to', in: 'query', schema: { type: 'string' }, description: '終了日 yyyy/mm/dd（monthと併用しない）' },
+      { name: 'lecturer', in: 'query', schema: { type: 'string' }, description: '講師名（部分一致）' },
+      { name: 'venue', in: 'query', schema: { type: 'string' }, description: '会場名（部分一致）' },
+      { name: 'include_canceled', in: 'query', schema: { type: 'string', enum: ['true', 'false'] }, description: '中止の回を含めるか。既定 true' },
+      { name: 'format', in: 'query', schema: { type: 'string', enum: ['json', 'pdf'] }, description: 'pdf を指定するとPDFを作成しURLを返す' },
+    ],
+    responses: { '200': { description: '検索結果' } },
+  } };
+  const instructions = [
+    'あなたはJPの秘書です。全厚済セミナーの予定を searchSeminars アクションで調べて答えます。',
+    '・「PBSだけ」「大阪だけ」「12月」「来月」などの条件を type / pref / month に変換して呼び出す。月は今日の日付から yyyy-mm に直す。',
+    '・「PDFにして」「PDFで」と言われたら format=pdf で呼び出し、返ってきた pdf_url を伝える。',
+    '・回答の並びは必ず「開催日｜時間（開始〜終了）｜種別｜講師名｜都道府県｜会場｜主催者」。',
+    '・音声で読み上げるときは、件数を先に言い、そのあと日付順に「日付・時間・講師・会場」を簡潔に読む。10件を超えるときは最初の10件を読み、残りは画面のリストかPDFを案内する。',
+    '・中止の回（canceled=true）は必ず「中止」と伝える。',
+    '・会場名の「…※」は元画面で名前が切れている印。推測で補わない。',
+    '・データに無いことは推測せず「一覧に無い」と答える。',
+  ].join('\n');
+  sh.getRange('A3:B5').setValues([
+    ['使い方', 'ChatGPT → GPTを作成 → 構成：「指示」にB4、アクション →「スキーマ」にB5を貼る（認証：なし）'],
+    ['指示（Instructions）', instructions],
+    ['スキーマ（Schema）', JSON.stringify(schema, null, 2)],
+  ]);
+  sh.getRange('B3:B5').setWrap(true).setVerticalAlignment('top');
+  sh.setColumnWidth(1, 160);
+  sh.setColumnWidth(2, 700);
 }
