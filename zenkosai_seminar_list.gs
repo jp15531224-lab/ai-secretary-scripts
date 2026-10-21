@@ -14,8 +14,15 @@
  *
  * 取り込み:
  *   一覧と同じフォルダの「取り込み待ち」フォルダに CSV（上と同じ列順、1行目は見出し）を置くと、
- *   毎日の処理で一覧に追記し、CSV は「取り込み済み」フォルダへ移す。
+ *   1時間ごとの処理で一覧に反映し、CSV は「取り込み済み」フォルダへ移す。
  *   同じ回（開催日＋開始時刻＋種別＋講師名）が既にあれば、新しい内容で上書きする（中止の反映など）。
+ *
+ * 入れ替え（撮り直し用）:
+ *   ファイル名を replace__<年-月>__<種別>__<都道府県>.csv にすると、その範囲の行を一覧から
+ *   いったん全部消してから CSV の内容を入れる（講師変更・削除された回・表記ゆれの残りを防ぐ）。
+ *   種別・都道府県は「+」区切り、絞り込み無しは ALL。
+ *   例）replace__2027-01__BE__ALL.csv / replace__2026-11__PBS__京都府+大阪府+兵庫県.csv
+ *   CSV が見出しだけ（0件）でも、その範囲は空になる。
  *
  * ChatGPT連携:
  *   ウェブアプリとして公開すると、ChatGPT（カスタムGPTのアクション）から
@@ -56,7 +63,7 @@ function setup() {
   ScriptApp.getProjectTriggers()
     .filter(t => t.getHandlerFunction() === 'daily')
     .forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('daily').timeBased().everyDays(1).atHour(5).inTimezone(TZ).create();
+  ScriptApp.newTrigger('daily').timeBased().everyHours(1).create();
 
   daily();
 }
@@ -75,12 +82,19 @@ function importInbox_(ss) {
   const files = inbox.getFiles();
   if (!files.hasNext()) return;
 
-  const rows = readRows_(sh);
-  const index = new Map(rows.map((r, i) => [rowKey_(r), i]));
-
+  const list = [];
   while (files.hasNext()) {
     const file = files.next();
-    if (!/\.csv$/i.test(file.getName()) && file.getMimeType() !== MimeType.CSV) continue;
+    if (/\.csv$/i.test(file.getName()) || file.getMimeType() === MimeType.CSV) list.push(file);
+  }
+  // 撮り直しの新しい方が後から効くよう、置いた順に処理する
+  list.sort((a, b) => a.getDateCreated() - b.getDateCreated());
+
+  let rows = readRows_(sh);
+  list.forEach(file => {
+    const scope = replaceScope_(file.getName());
+    if (scope) rows = rows.filter(r => !inScope_(r, scope));
+    const index = new Map(rows.map((r, i) => [rowKey_(r), i]));
     const csv = Utilities.parseCsv(file.getBlob().getDataAsString('UTF-8'));
     csv.forEach(line => {
       if (line.length < HEADERS.length || line[0] === HEADERS[0]) return;
@@ -94,8 +108,24 @@ function importInbox_(ss) {
       }
     });
     file.moveTo(done);
-  }
+  });
   writeRows_(sh, rows);
+}
+
+// replace__2027-01__BE__ALL.csv → { month: '2027/01', types: ['BE'], prefs: null }
+function replaceScope_(name) {
+  const m = String(name).match(/^replace__(\d{4})-(\d{1,2})__([^_]+)__(.+)\.csv$/i);
+  if (!m) return null;
+  const types = m[3].split('+').map(t => t.trim().toUpperCase()).filter(Boolean);
+  const prefs = m[4].toUpperCase() === 'ALL' ? null : m[4].split('+').map(x => x.trim()).filter(Boolean);
+  return { month: m[1] + '/' + ('0' + m[2]).slice(-2), types: types, prefs: prefs };
+}
+
+function inScope_(r, scope) {
+  const d = parseDate_(r[0]);
+  if (!d || Utilities.formatDate(d, TZ, 'yyyy/MM') !== scope.month) return false;
+  if (scope.types.indexOf(String(r[2]).toUpperCase()) < 0) return false;
+  return !scope.prefs || scope.prefs.indexOf(String(r[4])) >= 0;
 }
 
 function pruneOld_(ss) {
@@ -188,9 +218,10 @@ function writeRules_(ss) {
     ['時間', '上段に開始、下段に終了（セル内改行）'],
     ['開催日', 'yyyy/mm/dd(曜)。年が無い行は自動削除の対象外'],
     ['会場', '中止は「（中止）」を付記。画面で切れた名称は「…※」のまま（推測で補わない）'],
-    ['自動削除', '毎日5時に実行。月が終わったら、その2ヶ月前の月の行を削除（例：12/1に9月以前を削除）'],
-    ['取り込み', '「' + INBOX_FOLDER + '」フォルダに同じ列順のCSVを置くと毎日追記し、「' + DONE_FOLDER + '」へ移動'],
+    ['自動削除', '1時間ごとに実行。月が終わったら、その2ヶ月前の月の行を削除（例：12/1に9月以前を削除）'],
+    ['取り込み', '「' + INBOX_FOLDER + '」フォルダに同じ列順のCSVを置くと1時間以内に反映し、「' + DONE_FOLDER + '」へ移動'],
     ['重複', '開催日＋開始時刻＋種別＋講師名が同じなら上書き'],
+    ['入れ替え', 'ファイル名 replace__年-月__種別__都道府県.csv はその範囲を全部消してから入れる（例 replace__2027-01__BE__ALL.csv）'],
     ['ChatGPT連携の合言葉', PropertiesService.getScriptProperties().getProperty('API_TOKEN') || '（setup実行後に表示）'],
   ];
   sh.clearContents();
