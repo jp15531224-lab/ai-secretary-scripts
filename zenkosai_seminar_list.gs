@@ -15,7 +15,7 @@
  * 取り込み:
  *   一覧と同じフォルダの「取り込み待ち」フォルダに CSV（上と同じ列順、1行目は見出し）を置くと、
  *   毎日の処理で一覧に追記し、CSV は「取り込み済み」フォルダへ移す。
- *   同じ回（開催日＋開始時刻＋講師名）が既にあれば、新しい内容で上書きする（中止の反映など）。
+ *   同じ回（開催日＋開始時刻＋種別＋講師名）が既にあれば、新しい内容で上書きする（中止の反映など）。
  *
  * 初回だけ: このファイルの中身を「拡張機能 → Apps Script」に貼り付け → setup を実行 → 権限を許可。
  */
@@ -132,7 +132,8 @@ function formatDate_(d) {
 function rowKey_(r) {
   const d = parseDate_(r[0]);
   const start = (String(r[1]).match(/\d{1,2}:\d{2}/) || [''])[0].padStart(5, '0');
-  return [d ? formatDate_(d) : r[0], start, String(r[3]).replace(/\s/g, '')].join('|');
+  // 同じ講師・同じ時刻で種別だけ違う回がある（例：中止のBTと開催のPBS）ため種別もキーに含める
+  return [d ? formatDate_(d) : r[0], start, r[2], String(r[3]).replace(/\s/g, '')].join('|');
 }
 
 function sortKey_(r) {
@@ -175,7 +176,7 @@ function writeRules_(ss) {
     ['会場', '中止は「（中止）」を付記。画面で切れた名称は「…※」のまま（推測で補わない）'],
     ['自動削除', '毎日5時に実行。月が終わったら、その2ヶ月前の月の行を削除（例：12/1に9月以前を削除）'],
     ['取り込み', '「' + INBOX_FOLDER + '」フォルダに同じ列順のCSVを置くと毎日追記し、「' + DONE_FOLDER + '」へ移動'],
-    ['重複', '開催日＋開始時刻＋講師名が同じなら上書き'],
+    ['重複', '開催日＋開始時刻＋種別＋講師名が同じなら上書き'],
   ];
   sh.clearContents();
   sh.getRange(1, 1, rules.length, 2).setValues(rules);
