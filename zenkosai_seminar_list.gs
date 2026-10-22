@@ -244,6 +244,7 @@ function doGet(e) {
   const p = (e && e.parameter) || {};
   const props = PropertiesService.getScriptProperties();
   if (!p.token || p.token !== props.getProperty('API_TOKEN')) return json_({ error: 'unauthorized' });
+  if (e.pathInfo || (p.action && p.action !== 'search')) return handleAttendance_(e);  // 参加者管理（参加者管理.gs）
 
   const ss = SpreadsheetApp.openById(props.getProperty('SHEET_ID'));
   const rows = filterRows_(readRows_(getListSheet_(ss)), p);
@@ -281,7 +282,7 @@ function filterRows_(rows, p) {
 
 function toItem_(r) {
   const t = String(r[1]).split('\n');
-  return { date: r[0], start: t[0] || '', end: t[1] || '', type: r[2], lecturer: r[3],
+  return { seminar_id: seminarId_(r), date: r[0], start: t[0] || '', end: t[1] || '', type: r[2], lecturer: r[3],
            pref: r[4], venue: r[5], organizer: r[6], canceled: String(r[5]).indexOf('（中止）') >= 0 };
 }
 
@@ -347,7 +348,7 @@ function chatgptSettings() {
   const token = PropertiesService.getScriptProperties().getProperty('API_TOKEN');
   const schema = {
     openapi: '3.1.0',
-    info: { title: '全厚済セミナー一覧', version: '1.0.0' },
+    info: { title: '全厚済セミナー一覧', version: '1.1.0' },
     servers: [{ url: 'https://script.google.com' }],
     paths: {},
   };
@@ -368,8 +369,9 @@ function chatgptSettings() {
     ],
     responses: { '200': { description: '検索結果' } },
   } };
+  addAttendanceParams_(schema.paths[m[1]].get);  // 参加者管理（参加者管理.gs）
   const instructions = [
-    'あなたはJPの秘書です。全厚済セミナーの予定を searchSeminars アクションで調べて答えます。',
+    'あなたはJPの秘書です。全厚済セミナーの予定を seminarApi アクションで調べて答えます。',
     '・「PBSだけ」「大阪だけ」「12月」「来月」などの条件を type / pref / month に変換して呼び出す。月は今日の日付から yyyy-mm に直す。',
     '・「1月」のように月だけ言われたら、今日以降で一番近いその月（例：今が2026年10月なら2027年1月）として扱う。',
     '・「PDFにして」「PDFで」と言われたら format=pdf で呼び出し、返ってきた pdf_url を伝える。',
@@ -378,7 +380,7 @@ function chatgptSettings() {
     '・中止の回（canceled=true）は必ず「中止」と伝える。',
     '・会場名の「…※」は元画面で名前が切れている印。推測で補わない。',
     '・データに無いことは推測せず「一覧に無い」と答える。',
-  ].join('\n');
+  ].join('\n') + attendanceInstructions_();
   sh.getRange('A3:B5').setValues([
     ['使い方', 'ChatGPT → GPTを作成 → 構成：「指示」にB4、アクション →「スキーマ」にB5を貼る（認証：なし）'],
     ['指示（Instructions）', instructions],
