@@ -1,0 +1,349 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "全厚済セミナー一覧",
+    "version": "1.1.0"
+  },
+  "servers": [
+    {
+      "url": "https://script.google.com"
+    }
+  ],
+  "paths": {
+    "/macros/s/<デプロイID>/exec": {
+      "get": {
+        "operationId": "seminarApi",
+        "summary": "全厚済セミナー一覧の検索・PDF、参加者の登録・変更・名簿・履歴・連絡リスト・確認待ち候補",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "<合言葉：ルールシートの値>"
+              ]
+            },
+            "description": "合言葉（常にこの値）"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "種別。PBS, BE, BT, コンベンション。複数はカンマ区切り"
+          },
+          {
+            "name": "pref",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "都道府県。例: 大阪, 兵庫。複数はカンマ区切り"
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "対象月 yyyy-mm。例: 2026-12"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "開始日 yyyy/mm/dd（monthと併用しない）"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "終了日 yyyy/mm/dd（monthと併用しない）"
+          },
+          {
+            "name": "lecturer",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "講師名（部分一致）"
+          },
+          {
+            "name": "venue",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "会場名（部分一致）"
+          },
+          {
+            "name": "include_canceled",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "description": "中止の回を含めるか。既定 true"
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "pdf"
+              ]
+            },
+            "description": "pdf を指定するとPDFを作成しURLを返す"
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "search",
+                "register",
+                "update",
+                "roster",
+                "history",
+                "followups",
+                "people",
+                "candidate_add",
+                "candidates",
+                "candidate_confirm"
+              ]
+            },
+            "description": "search=一覧検索(既定) / register=参加登録 / update=変更 / roster=セミナー別名簿 / history=人別履歴 / followups=連絡リスト / people=人物検索 / candidate_add=確認待ち候補を保存 / candidates=候補一覧 / candidate_confirm=候補の承認・却下"
+          },
+          {
+            "name": "seminar_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "セミナーID（検索結果や前の応答の seminar_id。分かっていれば優先）"
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "開催日 yyyy-mm-dd（参加者管理でセミナーを探す時）"
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "開始時刻 hh:mm"
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "氏名（さん付け不要）"
+          },
+          {
+            "name": "person_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "人物ID（同名で選び直す時）"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "状態: 案内予定/案内済み/返事待ち/参加予定/未定/辞退/キャンセル/参加済み/フォロー済み（history・followups では絞り込み、カンマ区切り可）"
+          },
+          {
+            "name": "new_person",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "同名の別人として新しく登録する時だけ true"
+          },
+          {
+            "name": "kana",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "読み"
+          },
+          {
+            "name": "person_note",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "同名を区別するメモ"
+          },
+          {
+            "name": "invited_on",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "案内日 yyyy-mm-dd"
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "連絡手段 LINE/電話"
+          },
+          {
+            "name": "reply",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "返事の内容"
+          },
+          {
+            "name": "next_contact",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "次回連絡日 yyyy-mm-dd。update で消す時は clear"
+          },
+          {
+            "name": "memo",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "メモ（update では追記）"
+          },
+          {
+            "name": "memo_mode",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "replace でメモを上書き"
+          },
+          {
+            "name": "record_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "記録ID（確認で選ばれた時）"
+          },
+          {
+            "name": "follow",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "フォロー状況 未フォロー/済み"
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "waiting",
+                "today",
+                "not_followed",
+                "status"
+              ]
+            },
+            "description": "followups の種類: waiting=返事待ち, today=今日（期限切れ含む）連絡する人, not_followed=参加後未フォロー, status=状態で絞る"
+          },
+          {
+            "name": "source_type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "候補の入口 PLAUD/ボイスメモ/LINE画像/画像メモ/貼り付け"
+          },
+          {
+            "name": "source_ref",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "候補の資料名（録音タイトル・ファイル名・日時）。同じ資料の再処理では同じ値"
+          },
+          {
+            "name": "evidence",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "候補の根拠となる発言・文面（短く）"
+          },
+          {
+            "name": "seminar_text",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "セミナーが決まらない時の手がかり"
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "candidates の絞り込み 確認待ち/登録済み/却下/all"
+          },
+          {
+            "name": "candidate_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "候補ID（カンマ区切りで複数可）"
+          },
+          {
+            "name": "decision",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "approve",
+                "reject"
+              ]
+            },
+            "description": "candidate_confirm の approve か reject"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "検索結果"
+          }
+        }
+      }
+    }
+  }
+}
