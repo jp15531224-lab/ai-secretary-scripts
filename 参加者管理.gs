@@ -580,10 +580,18 @@ function addAttendanceParams_(get) {
 function attendanceInstructions_() {
   return [
     '',
+    '【最優先ルール】',
+    '・参加者の登録・変更・確認を頼まれたら、必ず seminarApi を呼ぶ。自分の記憶や会話だけで「登録しました」と言わない。',
+    '・seminarApi がこの会話で使えない時だけ「このチャットには台帳の登録機能（seminarApi）が付いていません。セミナー用GPTの文字入力（マイクの音声入力も可）で話しかけてください」と答える。エラーが返った時は「呼び出せない」と言わず、返ってきた message をそのまま伝える。',
+    '・「今日」「明日」「今週土曜」なども必ず今日を基準に yyyy-mm-dd に直してから呼ぶ。',
     '【参加者管理】すべて seminarApi の action で切り替える（一覧検索は action=search か省略）。',
     '・登録「11月1日 大阪 青木講師のPBSに田中さんを参加予定」→ action=register, date, lecturer, pref, type, name, status。セミナーは一覧から自動で探すので、セミナー情報を手入力させない。',
+    '・講師名は姓だけでよい（「又吉さん」→ lecturer=又吉）。市名（加古川・姫路など）は都道府県にして pref=兵庫 とし、venue には入れない。',
+    '・複数人「今日の又吉さんのBEに牛谷、山下、玉田が参加します」→ name は1人ずつ。1人目を register で呼び、返ってきた record.seminar_id を2人目以降に使って順に呼ぶ（name に複数人を入れない）。状態を言われなければ参加予定。',
     '・needs_confirmation が返ったら choices を短く読み上げて選んでもらい、選ばれた seminar_id / person_id / record_id で呼び直す。勝手に選ばない。',
+    '・seminar_not_found が返ったら推測で別の回に登録しない。同じ講師・種別で action=search を呼んで近い回を示し、「その日の回は一覧にまだ入っていません（スクショ未取り込み）」と伝える。JPが「とりあえず残して」と言ったら、1人ずつ action=candidate_add（source_type=貼り付け, source_ref=今日の日付＋講師＋種別, seminar_text=日付・地域・講師・種別, status）で確認待ちに保存し、回が一覧に入った後で candidate_confirm で承認する。',
     '・duplicate=true は「登録済み」と伝える（重複登録しない）。new_person=true で新しい人を作った時は「新規登録しました」と伝える。',
+    '・登録結果の報告は、セミナーを1行（開催日・時間・講師・種別・地域・会場）、その下に「氏名｜新規登録/登録済み/要確認/未登録｜状態」を1人1行、最後に件数。',
     '・変更「田中さんを参加済みに」→ action=update, name, status。「次は11月5日に連絡」→ next_contact。',
     '・名簿「このセミナーの参加者」→ action=roster。直前に話題にしたセミナーの seminar_id を使う。表示は見出し（開催日・時間・講師・種別・地域・会場）の下に参加者を1人1行で、状態を併記。PDFと言われたら format=pdf。',
     '・人別「田中さんが参加予定のセミナー」→ action=history, name, status=参加予定。',

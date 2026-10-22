@@ -122,10 +122,12 @@
                 "people",
                 "candidate_add",
                 "candidates",
-                "candidate_confirm"
+                "candidate_confirm",
+                "memos",
+                "memo_done"
               ]
             },
-            "description": "search=一覧検索(既定) / register=参加登録 / update=変更 / roster=セミナー別名簿 / history=人別履歴 / followups=連絡リスト / people=人物検索 / candidate_add=確認待ち候補を保存 / candidates=候補一覧 / candidate_confirm=候補の承認・却下"
+            "description": "search=一覧検索(既定) / register=参加登録 / update=変更 / roster=セミナー別名簿 / history=人別履歴 / followups=連絡リスト / people=人物検索 / candidate_add=確認待ち候補を保存 / candidates=候補一覧 / candidate_confirm=候補の承認・却下 / memos=ドライブのボイスメモ・PLAUDを読む / memo_done=資料を処理済みにする"
           },
           {
             "name": "seminar_id",
@@ -336,6 +338,59 @@
               ]
             },
             "description": "candidate_confirm の approve か reject"
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "voicememo",
+                "plaud"
+              ]
+            },
+            "description": "memos の対象 voicememo/plaud/all（既定 all）"
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "memos で何日前までを見るか（既定3、今日だけなら1）"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "memos で読む件数（既定3、最大5）"
+          },
+          {
+            "name": "keyword",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "memos のタイトル絞り込み（人名・話題など）"
+          },
+          {
+            "name": "include_processed",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "memos で処理済みも含める時 true"
+          },
+          {
+            "name": "count",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "memo_done の候補数"
           }
         ],
         "responses": {
