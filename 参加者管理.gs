@@ -41,9 +41,13 @@ const CLOSED_STATUSES = ['辞退', 'キャンセル', 'フォロー済み', 'リ
 const ATTENDING = ['参加予定', '参加済み', 'フォロー済み'];
 // リーダー（不参加）：名簿で（）付きのグループリーダー。本人は参加しないが記録する（参加人数・連絡リストに入らない）
 const LEADER = 'リーダー（不参加）';
-// 名簿の名前の後ろの印。◯○〇⚪＝新規・あまりセミナーに行っていない人、◎＝未登録新規。印は名前から外して参加記録の「印」列に残す
-const NEW_MARK_RE = /[◯○〇⚪◎]/;
+// 名簿の名前の後ろの印（JP指定）。印は名前から外して参加記録の「印」列に残す
+//   ◎＝未登録新規　◯○〇⚪・⭐★☆＝登録済み新規（あまりセミナーに行っていない人）　※＝チケット確保済み
+//   チケット確保済みの人が不参加になったら「チケット余り」として数える
 const UNREG_MARK_RE = /◎/;
+const REG_NEW_MARK_RE = /[◯○〇⚪⭐★☆]/;
+const NEW_MARK_RE = /[◯○〇⚪⭐★☆◎]/;
+const TICKET_MARK_RE = /※/;
 const MARK_TAIL_RE = /[◯○〇⚪◎※⭐★☆]+$/;
 const NOT_ATTENDING = ['辞退', 'キャンセル', 'リーダー（不参加）'];
 const LAST_SEMINAR_HOURS = 24;  // セミナー指定なしの追加は、この時間内に扱ったセミナーとみなす
@@ -294,30 +298,35 @@ function seminarRoster_(ss, p) {
   const sem = resolveSeminar_(ss, p);
   if (!sem.seminar) return sem;
   const s = sem.seminar;
-  // sort=new で新規（◯印）の人を先頭に。new_only=true で新規の人だけ
+  // sort=new で 未登録新規→登録済み新規→その他 の順。new_only=true で新規（◎◯⭐）の人だけ
   const newFirst = p.sort === 'new';
   const rows = readObjects_(ss, RECORD_SHEET, RECORD_HEADERS).filter(r => r['セミナーID'] === s.seminar_id)
     .filter(r => String(p.new_only) !== 'true' || isNew_(r))
     .sort((a, b) => STATUS_ORDER.indexOf(a['状態']) - STATUS_ORDER.indexOf(b['状態'])
-      || (newFirst ? (isNew_(b) ? 1 : 0) - (isNew_(a) ? 1 : 0) : 0)
+      || (newFirst ? newRank_(a) - newRank_(b) : 0)
       || String(a['氏名']).localeCompare(String(b['氏名']), 'ja'));
   const header = { date: s.date, time: s.start + (s.end ? '〜' + s.end : ''), lecturer: s.lecturer, type: s.type,
                    pref: s.pref, venue: s.venue, organizer: s.organizer, canceled: s.canceled, in_list: s.in_list };
   const res = { seminar_id: s.seminar_id, header: header, count: rows.length,
                 attending: rows.filter(r => ATTENDING.indexOf(r['状態']) >= 0).length,
-                new_attending: rows.filter(r => ATTENDING.indexOf(r['状態']) >= 0 && isNew_(r)).length,
                 unregistered_new_attending: rows.filter(r => ATTENDING.indexOf(r['状態']) >= 0 && newKind_(r['印']) === '未登録新規').length,
+                registered_new_attending: rows.filter(r => ATTENDING.indexOf(r['状態']) >= 0 && newKind_(r['印']) === '登録済み新規').length,
+                ticket_attending: rows.filter(r => ATTENDING.indexOf(r['状態']) >= 0 && hasTicket_(r)).length,
+                ticket_spare: rows.filter(ticketSpare_).map(r => r['氏名']),
                 leaders: rows.filter(r => r['状態'] === LEADER).map(r => r['氏名']),
-                participants: rows.map(r => ({ name: r['氏名'], mark: r['印'] || '', is_new: isNew_(r), new_kind: newKind_(r['印']), status: r['状態'],
+                participants: rows.map(r => ({ name: r['氏名'], mark: r['印'] || '', is_new: isNew_(r), new_kind: newKind_(r['印']),
+                                              ticket: hasTicket_(r), ticket_spare: ticketSpare_(r), status: r['状態'],
                                               record_id: r['記録ID'], next_contact: r['次回連絡日'] })) };
   if (p.format === 'pdf') {
     const head = [['開催日', s.date], ['時間', header.time], ['講師', s.lecturer], ['種別', s.type], ['地域', s.pref],
                   ['会場', s.venue + (s.canceled ? '（中止）' : '')]];
     const table = '<table class="h">' + head.map(h => '<tr><th>' + h[0] + '</th><td>' + esc_(h[1]) + '</td></tr>').join('') + '</table>'
-      + '<h2>参加者（' + rows.length + '名）</h2><table><tr><th>No</th><th>氏名</th><th>新規</th><th>状態</th></tr>'
-      + rows.map((r, i) => '<tr><td>' + (i + 1) + '</td><td>' + esc_(r['氏名']) + '</td><td>' + ({ '新規': '◯ 新規', '未登録新規': '◎ 未登録新規' }[newKind_(r['印'])] || '')
+      + '<h2>参加者（' + rows.length + '名）</h2><table><tr><th>No</th><th>氏名</th><th>新規</th><th>チケット</th><th>状態</th></tr>'
+      + rows.map((r, i) => '<tr><td>' + (i + 1) + '</td><td>' + esc_(r['氏名']) + '</td><td>'
+        + ({ '登録済み新規': '◯ 登録済み新規', '未登録新規': '◎ 未登録新規' }[newKind_(r['印'])] || '')
+        + '</td><td>' + (ticketSpare_(r) ? 'チケット余り' : hasTicket_(r) ? '※ 確保済み' : '')
         + '</td><td>' + esc_(r['状態']) + '</td></tr>').join('') + '</table>'
-      + '<p>◯ 新規＝新規・あまりセミナーに行っていない人　◎ 未登録新規＝まだ登録していない新規の人</p>';
+      + '<p>◎ 未登録新規　◯⭐ 登録済み新規（あまりセミナーに行っていない人）　※ チケット確保済み　チケット余り＝チケット確保済みで不参加になった人</p>';
     const f = savePdf_(ss, '参加者名簿（' + s.date + ' ' + s.type + ' ' + s.lecturer + '）', table,
       '名簿_' + Utilities.formatDate(parseDate_(s.date) || new Date(), TZ, 'yyyyMMdd') + '_' + s.type + '_' + norm_(s.lecturer));
     res.pdf_url = f.getUrl(); res.pdf_name = f.getName();
@@ -580,14 +589,24 @@ function parseEntry_(raw) {
   const t = n.match(MARK_TAIL_RE);
   const mark = t ? t[0] : '';
   if (mark) n = n.slice(0, n.length - mark.length).trim();
-  return { name: n, mark: mark, leader: leader, is_new: NEW_MARK_RE.test(mark), new_kind: newKind_(mark) };
+  return { name: n, mark: mark, leader: leader, is_new: NEW_MARK_RE.test(mark), new_kind: newKind_(mark), ticket: TICKET_MARK_RE.test(mark) };
 }
 
 function isNew_(r) { return NEW_MARK_RE.test(String(r['印'] || '')); }
-// 新規の種類：◎＝未登録新規、◯など＝新規、印なし＝''
+// 新規の種類：◎＝未登録新規、◯⭐など＝登録済み新規、印なし＝''
 function newKind_(mark) {
   const m = String(mark || '');
-  return UNREG_MARK_RE.test(m) ? '未登録新規' : NEW_MARK_RE.test(m) ? '新規' : '';
+  return UNREG_MARK_RE.test(m) ? '未登録新規' : REG_NEW_MARK_RE.test(m) ? '登録済み新規' : '';
+}
+function newRank_(r) { const k = newKind_(r['印']); return k === '未登録新規' ? 0 : k === '登録済み新規' ? 1 : 2; }
+function hasTicket_(r) { return TICKET_MARK_RE.test(String(r['印'] || '')); }
+// チケット余り＝チケット確保済み（※）で、キャンセル・辞退になった人（リーダーは除く）
+function ticketSpare_(r) { return hasTicket_(r) && (r['状態'] === 'キャンセル' || r['状態'] === '辞退'); }
+// 印は足していく（後の名簿に印が無くても消さない）
+function mergeMark_(oldMark, add) {
+  let m = String(oldMark || '');
+  Array.from(String(add || '')).forEach(c => { if (m.indexOf(c) < 0) m += c; });
+  return m;
 }
 
 function changeInfo_(p) {
@@ -637,8 +656,9 @@ function changeOne_(ss, p, s, name, intent, res, records, mark) {
         .push({ name: person['氏名'], record_id: r['記録ID'], status_before: '', mark: mark || '' });
     }
     const before = rec['状態'];
-    const markChanged = !!mark && rec['印'] !== mark;  // 印は付いている時だけ上書き（印なしの名簿では消さない）
-    if (markChanged) { logChange_(ss, '印', rec, rec['印'], mark, info); rec['印'] = mark; }
+    const merged = mergeMark_(rec['印'], mark);  // 印は足すだけ（印なしの名簿では消さない）
+    const markChanged = merged !== String(rec['印'] || '');
+    if (markChanged) { logChange_(ss, '印', rec, rec['印'], merged, info); rec['印'] = merged; }
     if (intent === 'leader') {
       if (before === LEADER) {
         if (markChanged) { rec['更新日時'] = now_(); saveRow_(sheet_(ss, RECORD_SHEET, RECORD_HEADERS), RECORD_HEADERS, rec); }
@@ -650,7 +670,7 @@ function changeOne_(ss, p, s, name, intent, res, records, mark) {
     if (ATTENDING.indexOf(before) >= 0) {
       if (markChanged) {
         rec['更新日時'] = now_(); saveRow_(sheet_(ss, RECORD_SHEET, RECORD_HEADERS), RECORD_HEADERS, rec);
-        res.marked.push({ name: person['氏名'], mark: mark });
+        res.marked.push({ name: person['氏名'], mark: merged });
       }
       return res.unchanged.push({ name: person['氏名'], status: before });
     }
@@ -667,8 +687,9 @@ function changeOne_(ss, p, s, name, intent, res, records, mark) {
     return toPending_(ss, p, s, person['氏名'], 'キャンセル', 'すでに「' + before + '」のため自動では不参加にしません', res);
   }
   const after = before === '参加予定' ? 'キャンセル' : '辞退';
-  setStatus_(ss, rec, after, Object.assign({ op: '不参加' }, info));
-  res.left.push({ name: person['氏名'], record_id: rec['記録ID'], status_before: before, status: after });
+  const spare = hasTicket_(rec);
+  setStatus_(ss, rec, after, Object.assign({ op: spare ? '不参加（チケット余り）' : '不参加' }, info));
+  res.left.push({ name: person['氏名'], record_id: rec['記録ID'], status_before: before, status: after, ticket_spare: spare });
 }
 
 function setStatus_(ss, rec, status, info) {
@@ -715,11 +736,14 @@ function summary_(ss, s, res, extra) {
       attending_now: s ? recs.filter(r => r['状態'] === '参加予定' || r['状態'] === '参加済み').length : null,
       new_attending_now: s ? recs.filter(r => (r['状態'] === '参加予定' || r['状態'] === '参加済み') && isNew_(r)).length : null,
       unregistered_new_now: s ? recs.filter(r => (r['状態'] === '参加予定' || r['状態'] === '参加済み') && newKind_(r['印']) === '未登録新規').length : null,
+      ticket_attending_now: s ? recs.filter(r => (r['状態'] === '参加予定' || r['状態'] === '参加済み') && hasTicket_(r)).length : null,
+      ticket_spare_now: s ? recs.filter(ticketSpare_).length : null,
       leaders_now: s ? recs.filter(r => r['状態'] === LEADER).length : null,
       pending_now: s ? cands.length : null,
     },
     attending_names: s ? recs.filter(r => r['状態'] === '参加予定' || r['状態'] === '参加済み').map(r => r['氏名'] + (r['印'] || '')) : [],
     leader_names: s ? recs.filter(r => r['状態'] === LEADER).map(r => r['氏名']) : [],
+    ticket_spare_names: s ? recs.filter(ticketSpare_).map(r => r['氏名']) : [],
   }, res, extra || {});
 }
 
@@ -968,7 +992,7 @@ function addAttendanceParams_(get) {
     q('invited_on', '案内日 yyyy-mm-dd'), q('channel', '連絡手段 LINE/電話'), q('reply', '返事の内容'),
     q('next_contact', '次回連絡日 yyyy-mm-dd。update で消す時は clear'), q('memo', 'メモ（update では追記）'), q('memo_mode', 'replace でメモを上書き'),
     q('record_id', '記録ID（確認で選ばれた時）'), q('follow', 'フォロー状況 未フォロー/済み'),
-    q('sort', 'roster：new で新規（名簿の◯・◎印）の人を先頭に並べる'), q('new_only', 'roster：true で新規（◯・◎印）の人だけ'),
+    q('sort', 'roster：new で 未登録新規（◎）→登録済み新規（◯⭐）→その他 の順'), q('new_only', 'roster：true で新規（◎◯⭐）の人だけ'),
     q('kind', 'followups の種類: waiting=返事待ち, today=今日（期限切れ含む）連絡する人, not_followed=参加後未フォロー, status=状態で絞る',
       { schema: { type: 'string', enum: ['waiting', 'today', 'not_followed', 'status'] } }),
     q('source_type', '候補の入口 PLAUD/ボイスメモ/LINE画像/画像メモ/貼り付け'),
