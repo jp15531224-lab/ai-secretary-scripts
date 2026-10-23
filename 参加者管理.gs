@@ -41,8 +41,9 @@ const CLOSED_STATUSES = ['辞退', 'キャンセル', 'フォロー済み', 'リ
 const ATTENDING = ['参加予定', '参加済み', 'フォロー済み'];
 // リーダー（不参加）：名簿で（）付きのグループリーダー。本人は参加しないが記録する（参加人数・連絡リストに入らない）
 const LEADER = 'リーダー（不参加）';
-// 名簿の名前の後ろの印。◯○〇⚪◎＝新規・あまりセミナーに行っていない人。印は名前から外して参加記録の「印」列に残す
+// 名簿の名前の後ろの印。◯○〇⚪＝新規・あまりセミナーに行っていない人、◎＝未登録新規。印は名前から外して参加記録の「印」列に残す
 const NEW_MARK_RE = /[◯○〇⚪◎]/;
+const UNREG_MARK_RE = /◎/;
 const MARK_TAIL_RE = /[◯○〇⚪◎※⭐★☆]+$/;
 const NOT_ATTENDING = ['辞退', 'キャンセル', 'リーダー（不参加）'];
 const LAST_SEMINAR_HOURS = 24;  // セミナー指定なしの追加は、この時間内に扱ったセミナーとみなす
@@ -305,17 +306,18 @@ function seminarRoster_(ss, p) {
   const res = { seminar_id: s.seminar_id, header: header, count: rows.length,
                 attending: rows.filter(r => ATTENDING.indexOf(r['状態']) >= 0).length,
                 new_attending: rows.filter(r => ATTENDING.indexOf(r['状態']) >= 0 && isNew_(r)).length,
+                unregistered_new_attending: rows.filter(r => ATTENDING.indexOf(r['状態']) >= 0 && newKind_(r['印']) === '未登録新規').length,
                 leaders: rows.filter(r => r['状態'] === LEADER).map(r => r['氏名']),
-                participants: rows.map(r => ({ name: r['氏名'], mark: r['印'] || '', is_new: isNew_(r), status: r['状態'],
+                participants: rows.map(r => ({ name: r['氏名'], mark: r['印'] || '', is_new: isNew_(r), new_kind: newKind_(r['印']), status: r['状態'],
                                               record_id: r['記録ID'], next_contact: r['次回連絡日'] })) };
   if (p.format === 'pdf') {
     const head = [['開催日', s.date], ['時間', header.time], ['講師', s.lecturer], ['種別', s.type], ['地域', s.pref],
                   ['会場', s.venue + (s.canceled ? '（中止）' : '')]];
     const table = '<table class="h">' + head.map(h => '<tr><th>' + h[0] + '</th><td>' + esc_(h[1]) + '</td></tr>').join('') + '</table>'
       + '<h2>参加者（' + rows.length + '名）</h2><table><tr><th>No</th><th>氏名</th><th>新規</th><th>状態</th></tr>'
-      + rows.map((r, i) => '<tr><td>' + (i + 1) + '</td><td>' + esc_(r['氏名']) + '</td><td>' + (isNew_(r) ? '◯' : '')
+      + rows.map((r, i) => '<tr><td>' + (i + 1) + '</td><td>' + esc_(r['氏名']) + '</td><td>' + ({ '新規': '◯ 新規', '未登録新規': '◎ 未登録新規' }[newKind_(r['印'])] || '')
         + '</td><td>' + esc_(r['状態']) + '</td></tr>').join('') + '</table>'
-      + '<p>新規＝名簿で名前の後ろに◯印のある人（新規・あまりセミナーに行っていない人）</p>';
+      + '<p>◯ 新規＝新規・あまりセミナーに行っていない人　◎ 未登録新規＝まだ登録していない新規の人</p>';
     const f = savePdf_(ss, '参加者名簿（' + s.date + ' ' + s.type + ' ' + s.lecturer + '）', table,
       '名簿_' + Utilities.formatDate(parseDate_(s.date) || new Date(), TZ, 'yyyyMMdd') + '_' + s.type + '_' + norm_(s.lecturer));
     res.pdf_url = f.getUrl(); res.pdf_name = f.getName();
@@ -578,10 +580,15 @@ function parseEntry_(raw) {
   const t = n.match(MARK_TAIL_RE);
   const mark = t ? t[0] : '';
   if (mark) n = n.slice(0, n.length - mark.length).trim();
-  return { name: n, mark: mark, leader: leader, is_new: NEW_MARK_RE.test(mark) };
+  return { name: n, mark: mark, leader: leader, is_new: NEW_MARK_RE.test(mark), new_kind: newKind_(mark) };
 }
 
 function isNew_(r) { return NEW_MARK_RE.test(String(r['印'] || '')); }
+// 新規の種類：◎＝未登録新規、◯など＝新規、印なし＝''
+function newKind_(mark) {
+  const m = String(mark || '');
+  return UNREG_MARK_RE.test(m) ? '未登録新規' : NEW_MARK_RE.test(m) ? '新規' : '';
+}
 
 function changeInfo_(p) {
   return { reason: p.reason || '', source: [p.source_type, p.source_ref].filter(Boolean).join(' ') };
@@ -707,6 +714,7 @@ function summary_(ss, s, res, extra) {
       leaders: res.leaders.length,
       attending_now: s ? recs.filter(r => r['状態'] === '参加予定' || r['状態'] === '参加済み').length : null,
       new_attending_now: s ? recs.filter(r => (r['状態'] === '参加予定' || r['状態'] === '参加済み') && isNew_(r)).length : null,
+      unregistered_new_now: s ? recs.filter(r => (r['状態'] === '参加予定' || r['状態'] === '参加済み') && newKind_(r['印']) === '未登録新規').length : null,
       leaders_now: s ? recs.filter(r => r['状態'] === LEADER).length : null,
       pending_now: s ? cands.length : null,
     },
@@ -960,7 +968,7 @@ function addAttendanceParams_(get) {
     q('invited_on', '案内日 yyyy-mm-dd'), q('channel', '連絡手段 LINE/電話'), q('reply', '返事の内容'),
     q('next_contact', '次回連絡日 yyyy-mm-dd。update で消す時は clear'), q('memo', 'メモ（update では追記）'), q('memo_mode', 'replace でメモを上書き'),
     q('record_id', '記録ID（確認で選ばれた時）'), q('follow', 'フォロー状況 未フォロー/済み'),
-    q('sort', 'roster：new で新規（名簿の◯印）の人を先頭に並べる'), q('new_only', 'roster：true で新規（◯印）の人だけ'),
+    q('sort', 'roster：new で新規（名簿の◯・◎印）の人を先頭に並べる'), q('new_only', 'roster：true で新規（◯・◎印）の人だけ'),
     q('kind', 'followups の種類: waiting=返事待ち, today=今日（期限切れ含む）連絡する人, not_followed=参加後未フォロー, status=状態で絞る',
       { schema: { type: 'string', enum: ['waiting', 'today', 'not_followed', 'status'] } }),
     q('source_type', '候補の入口 PLAUD/ボイスメモ/LINE画像/画像メモ/貼り付け'),
