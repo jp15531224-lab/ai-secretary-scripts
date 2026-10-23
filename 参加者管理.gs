@@ -515,12 +515,12 @@ function names_(v) {
     .filter(x => x && !seen[norm_(x)] && (seen[norm_(x)] = true));
 }
 
-// 名前として使えるか（判読不可・？付き・「P山」のような英字＋漢字の混入・IDの貼り間違いを弾く）
+// 名前として使えるか（判読不可・？付き・IDの貼り間違いを弾く）。
+// 「P山」「石原GM」「東谷け」のような呼び名はJPの実際の書き方なのでそのまま受け付ける。
 function validName_(name) {
   const n = String(name || '').trim();
   if (!n || /[?？]|判読|不明/.test(n)) return false;
-  if (/^[A-Za-z]{1,3}[^\x00-\x7F]/.test(n)) return false;
-  if (/^[PRC]\d{6,}/.test(n)) return false;
+  if (/^[PRCH]\d{6,}/.test(n)) return false;
   return true;
 }
 
