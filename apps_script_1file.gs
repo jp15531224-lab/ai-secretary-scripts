@@ -393,7 +393,6 @@ function chatgptSettings() {
   sh.setColumnWidth(1, 160);
   sh.setColumnWidth(2, 700);
 }
-
 /**
  * 全厚済セミナー：参加者管理（「コード.gs」と同じプロジェクトに追加するファイル）
  *
@@ -432,12 +431,13 @@ const HISTORY_SHEET = '変更履歴';
 const HISTORY_HEADERS = ['履歴ID', '日時', '操作', '記録ID', '人物ID', '氏名', 'セミナーID', '開催日', '変更前', '変更後', '理由', '出典'];
 const MEMO_DONE_SHEET = '処理済み資料';
 const MEMO_DONE_HEADERS = ['資料', '処理日時', '候補数'];
-const STATUSES = ['案内予定', '案内済み', '返事待ち', '参加予定', '未定', '辞退', 'キャンセル', '参加済み', 'フォロー済み'];
-const CLOSED_STATUSES = ['辞退', 'キャンセル', 'フォロー済み'];
+const STATUSES = ['案内予定', '案内済み', '返事待ち', '参加予定', '未定', '辞退', 'キャンセル', '参加済み', 'フォロー済み', 'リーダー（不参加）'];
+const CLOSED_STATUSES = ['辞退', 'キャンセル', 'フォロー済み', 'リーダー（不参加）'];
 const ATTENDING = ['参加予定', '参加済み', 'フォロー済み'];
-const NOT_ATTENDING = ['辞退', 'キャンセル'];
+// リーダー（不参加）：名簿で（）付きのグループリーダー。本人は参加しないが記録する（参加人数・連絡リストに入らない）
+const NOT_ATTENDING = ['辞退', 'キャンセル', 'リーダー（不参加）'];
 const LAST_SEMINAR_HOURS = 24;  // セミナー指定なしの追加は、この時間内に扱ったセミナーとみなす
-const STATUS_ORDER = ['参加済み', 'フォロー済み', '参加予定', '返事待ち', '案内済み', '未定', '案内予定', '辞退', 'キャンセル'];
+const STATUS_ORDER = ['参加済み', 'フォロー済み', '参加予定', '返事待ち', '案内済み', '未定', '案内予定', 'リーダー（不参加）', '辞退', 'キャンセル'];
 
 function handleAttendance_(e) {
   const p = (e && e.parameter) || {};
@@ -995,8 +995,9 @@ function changeOne_(ss, p, s, name, intent, res, records) {
     }
     const before = rec['状態'];
     if (ATTENDING.indexOf(before) >= 0) return res.unchanged.push({ name: person['氏名'], status: before });
-    setStatus_(ss, rec, '参加予定', Object.assign({ op: NOT_ATTENDING.indexOf(before) >= 0 ? '再参加' : '追加' }, info));
-    return (NOT_ATTENDING.indexOf(before) >= 0 ? res.rejoined : res.added)
+    const back = NOT_ATTENDING.indexOf(before) >= 0 && before !== 'リーダー（不参加）';  // リーダーが参加する時は「追加」
+    setStatus_(ss, rec, '参加予定', Object.assign({ op: back ? '再参加' : '追加' }, info));
+    return (back ? res.rejoined : res.added)
       .push({ name: person['氏名'], record_id: rec['記録ID'], status_before: before });
   }
   // leave
