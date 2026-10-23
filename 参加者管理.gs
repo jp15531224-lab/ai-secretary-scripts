@@ -29,7 +29,7 @@ const RECORD_SHEET = '参加記録';
 const CANDIDATE_SHEET = '確認待ち候補';
 const PERSON_HEADERS = ['人物ID', '氏名', '読み', '区別メモ', '登録日時'];
 const RECORD_HEADERS = ['記録ID', '人物ID', '氏名', 'セミナーID', '開催日', '時間', '種別', '講師', '地域', '会場',
-  '案内日', '連絡手段', '返事', '状態', '次回連絡日', 'フォロー状況', 'メモ', '登録日時', '更新日時'];
+  '案内日', '連絡手段', '返事', '状態', '次回連絡日', 'フォロー状況', 'メモ', '登録日時', '更新日時', '印'];
 const CANDIDATE_HEADERS = ['候補ID', '入口', '資料', '重複キー', '根拠', '氏名', '人物ID', 'セミナーID', 'セミナー表示',
   '提案状態', '次回連絡日', 'メモ', '確認状態', '記録ID', '作成日時'];
 const HISTORY_SHEET = '変更履歴';
@@ -40,6 +40,10 @@ const STATUSES = ['案内予定', '案内済み', '返事待ち', '参加予定'
 const CLOSED_STATUSES = ['辞退', 'キャンセル', 'フォロー済み', 'リーダー（不参加）'];
 const ATTENDING = ['参加予定', '参加済み', 'フォロー済み'];
 // リーダー（不参加）：名簿で（）付きのグループリーダー。本人は参加しないが記録する（参加人数・連絡リストに入らない）
+const LEADER = 'リーダー（不参加）';
+// 名簿の名前の後ろの印。◯○〇⚪◎＝新規・あまりセミナーに行っていない人。印は名前から外して参加記録の「印」列に残す
+const NEW_MARK_RE = /[◯○〇⚪◎]/;
+const MARK_TAIL_RE = /[◯○〇⚪◎※⭐★☆]+$/;
 const NOT_ATTENDING = ['辞退', 'キャンセル', 'リーダー（不参加）'];
 const LAST_SEMINAR_HOURS = 24;  // セミナー指定なしの追加は、この時間内に扱ったセミナーとみなす
 const STATUS_ORDER = ['参加済み', 'フォロー済み', '参加予定', '返事待ち', '案内済み', '未定', '案内予定', 'リーダー（不参加）', '辞退', 'キャンセル'];
@@ -289,18 +293,29 @@ function seminarRoster_(ss, p) {
   const sem = resolveSeminar_(ss, p);
   if (!sem.seminar) return sem;
   const s = sem.seminar;
+  // sort=new で新規（◯印）の人を先頭に。new_only=true で新規の人だけ
+  const newFirst = p.sort === 'new';
   const rows = readObjects_(ss, RECORD_SHEET, RECORD_HEADERS).filter(r => r['セミナーID'] === s.seminar_id)
-    .sort((a, b) => STATUS_ORDER.indexOf(a['状態']) - STATUS_ORDER.indexOf(b['状態']) || String(a['氏名']).localeCompare(String(b['氏名']), 'ja'));
+    .filter(r => String(p.new_only) !== 'true' || isNew_(r))
+    .sort((a, b) => STATUS_ORDER.indexOf(a['状態']) - STATUS_ORDER.indexOf(b['状態'])
+      || (newFirst ? (isNew_(b) ? 1 : 0) - (isNew_(a) ? 1 : 0) : 0)
+      || String(a['氏名']).localeCompare(String(b['氏名']), 'ja'));
   const header = { date: s.date, time: s.start + (s.end ? '〜' + s.end : ''), lecturer: s.lecturer, type: s.type,
                    pref: s.pref, venue: s.venue, organizer: s.organizer, canceled: s.canceled, in_list: s.in_list };
   const res = { seminar_id: s.seminar_id, header: header, count: rows.length,
-                participants: rows.map(r => ({ name: r['氏名'], status: r['状態'], record_id: r['記録ID'], next_contact: r['次回連絡日'] })) };
+                attending: rows.filter(r => ATTENDING.indexOf(r['状態']) >= 0).length,
+                new_attending: rows.filter(r => ATTENDING.indexOf(r['状態']) >= 0 && isNew_(r)).length,
+                leaders: rows.filter(r => r['状態'] === LEADER).map(r => r['氏名']),
+                participants: rows.map(r => ({ name: r['氏名'], mark: r['印'] || '', is_new: isNew_(r), status: r['状態'],
+                                              record_id: r['記録ID'], next_contact: r['次回連絡日'] })) };
   if (p.format === 'pdf') {
     const head = [['開催日', s.date], ['時間', header.time], ['講師', s.lecturer], ['種別', s.type], ['地域', s.pref],
                   ['会場', s.venue + (s.canceled ? '（中止）' : '')]];
     const table = '<table class="h">' + head.map(h => '<tr><th>' + h[0] + '</th><td>' + esc_(h[1]) + '</td></tr>').join('') + '</table>'
-      + '<h2>参加者（' + rows.length + '名）</h2><table><tr><th>No</th><th>氏名</th><th>状態</th></tr>'
-      + rows.map((r, i) => '<tr><td>' + (i + 1) + '</td><td>' + esc_(r['氏名']) + '</td><td>' + esc_(r['状態']) + '</td></tr>').join('') + '</table>';
+      + '<h2>参加者（' + rows.length + '名）</h2><table><tr><th>No</th><th>氏名</th><th>新規</th><th>状態</th></tr>'
+      + rows.map((r, i) => '<tr><td>' + (i + 1) + '</td><td>' + esc_(r['氏名']) + '</td><td>' + (isNew_(r) ? '◯' : '')
+        + '</td><td>' + esc_(r['状態']) + '</td></tr>').join('') + '</table>'
+      + '<p>新規＝名簿で名前の後ろに◯印のある人（新規・あまりセミナーに行っていない人）</p>';
     const f = savePdf_(ss, '参加者名簿（' + s.date + ' ' + s.type + ' ' + s.lecturer + '）', table,
       '名簿_' + Utilities.formatDate(parseDate_(s.date) || new Date(), TZ, 'yyyyMMdd') + '_' + s.type + '_' + norm_(s.lecturer));
     res.pdf_url = f.getUrl(); res.pdf_name = f.getName();
@@ -552,8 +567,21 @@ function pickSeminar_(ss, p) {
 }
 
 function newResult_() {
-  return { added: [], rejoined: [], left: [], unchanged: [], pending: [], not_registered: [], needs_choice: [] };
+  return { added: [], rejoined: [], left: [], unchanged: [], pending: [], not_registered: [], needs_choice: [], leaders: [], marked: [] };
 }
+
+// 名簿の1人分を読む。（）付き＝参加しないグループリーダー（括弧が無ければ参加）。名前の後ろの印は外して mark に分ける
+function parseEntry_(raw) {
+  let n = String(raw || '').trim(), leader = false;
+  const m = n.match(/^[（(](.+)[）)]$/);
+  if (m) { n = m[1].trim(); leader = true; }
+  const t = n.match(MARK_TAIL_RE);
+  const mark = t ? t[0] : '';
+  if (mark) n = n.slice(0, n.length - mark.length).trim();
+  return { name: n, mark: mark, leader: leader, is_new: NEW_MARK_RE.test(mark) };
+}
+
+function isNew_(r) { return NEW_MARK_RE.test(String(r['印'] || '')); }
 
 function changeInfo_(p) {
   return { reason: p.reason || '', source: [p.source_type, p.source_ref].filter(Boolean).join(' ') };
@@ -572,38 +600,57 @@ function toPending_(ss, p, s, name, proposed, why, res) {
 }
 
 // 1人分の変更。intent: join（参加予定にする）/ leave（不参加にする）
-function changeOne_(ss, p, s, name, intent, res, records) {
+function changeOne_(ss, p, s, name, intent, res, records, mark) {
   if (!validName_(name)) return toPending_(ss, p, s, name, intent === 'join' ? '参加予定' : 'キャンセル', '名前が確定していません', res);
   const people = findPeople_(ss, { name: name });
   if (people.length > 1) return toPending_(ss, p, s, name, intent === 'join' ? '参加予定' : 'キャンセル', '同じ名前の人が' + people.length + '人います', res);
   let person = people[0];
   if (!person) {
     if (intent === 'leave') return res.not_registered.push({ name: name, why: '人物に登録されていません（変更なし）' });
+    // join・leader は新しい人物として登録する
     const created = resolvePerson_(ss, { name: name, new_person: 'true' }, true);
     if (!created.person) return toPending_(ss, p, s, name, '参加予定', created.message || '登録できませんでした', res);
     person = created.person;
   }
   const rec = records.filter(r => r['人物ID'] === person['人物ID'] && r['セミナーID'] === s.seminar_id)[0];
   const info = changeInfo_(p);
-  if (intent === 'join') {
+  if (intent === 'join' || intent === 'leader') {
+    const status = intent === 'leader' ? LEADER : '参加予定';
     if (!rec) {
       const r = {
         '記録ID': newId_('R'), '人物ID': person['人物ID'], '氏名': person['氏名'], 'セミナーID': s.seminar_id,
         '開催日': s.date, '時間': s.start + (s.end ? '\n' + s.end : ''), '種別': s.type, '講師': s.lecturer, '地域': s.pref, '会場': s.venue,
-        '案内日': '', '連絡手段': p.channel || '', '返事': '', '状態': '参加予定', '次回連絡日': '', 'フォロー状況': '',
-        'メモ': info.source ? '出典：' + info.source : '', '登録日時': now_(), '更新日時': now_(),
+        '案内日': '', '連絡手段': p.channel || '', '返事': '', '状態': status, '次回連絡日': '', 'フォロー状況': '',
+        'メモ': info.source ? '出典：' + info.source : '', '登録日時': now_(), '更新日時': now_(), '印': mark || '',
       };
       appendObject_(ss, RECORD_SHEET, RECORD_HEADERS, r);
       records.push(r);
-      logChange_(ss, '追加', r, '', '参加予定', info);
-      return res.added.push({ name: person['氏名'], record_id: r['記録ID'], status_before: '' });
+      logChange_(ss, intent === 'leader' ? 'リーダー' : '追加', r, '', status, info);
+      return (intent === 'leader' ? res.leaders : res.added)
+        .push({ name: person['氏名'], record_id: r['記録ID'], status_before: '', mark: mark || '' });
     }
     const before = rec['状態'];
-    if (ATTENDING.indexOf(before) >= 0) return res.unchanged.push({ name: person['氏名'], status: before });
-    const back = NOT_ATTENDING.indexOf(before) >= 0 && before !== 'リーダー（不参加）';  // リーダーが参加する時は「追加」
+    const markChanged = !!mark && rec['印'] !== mark;  // 印は付いている時だけ上書き（印なしの名簿では消さない）
+    if (markChanged) { logChange_(ss, '印', rec, rec['印'], mark, info); rec['印'] = mark; }
+    if (intent === 'leader') {
+      if (before === LEADER) {
+        if (markChanged) { rec['更新日時'] = now_(); saveRow_(sheet_(ss, RECORD_SHEET, RECORD_HEADERS), RECORD_HEADERS, rec); }
+        return res.unchanged.push({ name: person['氏名'], status: before });
+      }
+      setStatus_(ss, rec, LEADER, Object.assign({ op: 'リーダー（不参加）' }, info));
+      return res.leaders.push({ name: person['氏名'], record_id: rec['記録ID'], status_before: before });
+    }
+    if (ATTENDING.indexOf(before) >= 0) {
+      if (markChanged) {
+        rec['更新日時'] = now_(); saveRow_(sheet_(ss, RECORD_SHEET, RECORD_HEADERS), RECORD_HEADERS, rec);
+        res.marked.push({ name: person['氏名'], mark: mark });
+      }
+      return res.unchanged.push({ name: person['氏名'], status: before });
+    }
+    const back = NOT_ATTENDING.indexOf(before) >= 0 && before !== LEADER;  // リーダーが参加する時は「追加」
     setStatus_(ss, rec, '参加予定', Object.assign({ op: back ? '再参加' : '追加' }, info));
     return (back ? res.rejoined : res.added)
-      .push({ name: person['氏名'], record_id: rec['記録ID'], status_before: before });
+      .push({ name: person['氏名'], record_id: rec['記録ID'], status_before: before, mark: rec['印'] || '' });
   }
   // leave
   if (!rec) return res.not_registered.push({ name: person['氏名'], why: 'このセミナーの参加記録がありません（変更なし）' });
@@ -657,10 +704,14 @@ function summary_(ss, s, res, extra) {
     counts: {
       added: res.added.length, left: res.left.length, rejoined: res.rejoined.length, unchanged: res.unchanged.length,
       pending: res.pending.length, not_registered: res.not_registered.length, needs_choice: res.needs_choice.length,
+      leaders: res.leaders.length,
       attending_now: s ? recs.filter(r => r['状態'] === '参加予定' || r['状態'] === '参加済み').length : null,
+      new_attending_now: s ? recs.filter(r => (r['状態'] === '参加予定' || r['状態'] === '参加済み') && isNew_(r)).length : null,
+      leaders_now: s ? recs.filter(r => r['状態'] === LEADER).length : null,
       pending_now: s ? cands.length : null,
     },
-    attending_names: s ? recs.filter(r => r['状態'] === '参加予定' || r['状態'] === '参加済み').map(r => r['氏名']) : [],
+    attending_names: s ? recs.filter(r => r['状態'] === '参加予定' || r['状態'] === '参加済み').map(r => r['氏名'] + (r['印'] || '')) : [],
+    leader_names: s ? recs.filter(r => r['状態'] === LEADER).map(r => r['氏名']) : [],
   }, res, extra || {});
 }
 
@@ -680,9 +731,14 @@ function applyChanges_(ss, p) {
   const sem = pickSeminar_(ss, p);
   if (!sem.seminar) return sem;
   const s = sem.seminar;
-  join.forEach(n => changeOne_(ss, p, s, n, 'join', res, records));
-  leave.forEach(n => changeOne_(ss, p, s, n, 'leave', res, records));
-  undecided.forEach(n => toPending_(ss, p, s, n, p.status || '未定', '参加か不参加か判断できません', res));
+  // （）付きはリーダー（不参加）。同じ名簿に括弧なしでも載っていれば参加を優先する
+  const entries = join.map(parseEntry_);
+  const joining = entries.filter(e => !e.leader).map(e => norm_(e.name));
+  entries.filter(e => !e.leader).forEach(e => changeOne_(ss, p, s, e.name, 'join', res, records, e.mark));
+  entries.filter(e => e.leader && joining.indexOf(norm_(e.name)) < 0)
+    .forEach(e => changeOne_(ss, p, s, e.name, 'leader', res, records, e.mark));
+  leave.forEach(n => changeOne_(ss, p, s, parseEntry_(n).name, 'leave', res, records));
+  undecided.forEach(n => toPending_(ss, p, s, parseEntry_(n).name, p.status || '未定', '参加か不参加か判断できません', res));
   return summary_(ss, s, res, { seminar_from: sem.from });
 }
 
@@ -696,7 +752,7 @@ function rosterSync_(ss, p) {
   const complete = String(p.complete) === 'true';
   const records = readObjects_(ss, RECORD_SHEET, RECORD_HEADERS);
   const people = readObjects_(ss, PERSON_SHEET, PERSON_HEADERS);
-  const listed = list.map(norm_);
+  const listed = list.map(n => norm_(parseEntry_(n).name));
   const isListed = r => {
     const per = people.filter(x => x['人物ID'] === r['人物ID'])[0] || {};
     return listed.indexOf(norm_(r['氏名'])) >= 0 || (per['読み'] && listed.indexOf(norm_(per['読み'])) >= 0);
@@ -710,7 +766,7 @@ function rosterSync_(ss, p) {
              would_leave: missing.map(r => r['氏名']) };
   }
   const res = newResult_();
-  list.forEach(n => changeOne_(ss, p, s, n, 'join', res, records));
+  list.map(parseEntry_).forEach(e => changeOne_(ss, p, s, e.name, e.leader ? 'leader' : 'join', res, records, e.mark));
   const kept = [];
   missing.forEach(r => {
     if (complete) changeOne_(ss, p, s, r['氏名'], 'leave', res, records);
@@ -775,6 +831,8 @@ function sheet_(ss, name, headers) {
     sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
     sh.setFrozenRows(1);
     sh.getRange(1, 1, sh.getMaxRows(), headers.length).setNumberFormat('@');
+  } else if (sh.getLastColumn() < headers.length) {
+    sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');  // 後から足した列の見出し
   }
   return sh;
 }
@@ -902,6 +960,7 @@ function addAttendanceParams_(get) {
     q('invited_on', '案内日 yyyy-mm-dd'), q('channel', '連絡手段 LINE/電話'), q('reply', '返事の内容'),
     q('next_contact', '次回連絡日 yyyy-mm-dd。update で消す時は clear'), q('memo', 'メモ（update では追記）'), q('memo_mode', 'replace でメモを上書き'),
     q('record_id', '記録ID（確認で選ばれた時）'), q('follow', 'フォロー状況 未フォロー/済み'),
+    q('sort', 'roster：new で新規（名簿の◯印）の人を先頭に並べる'), q('new_only', 'roster：true で新規（◯印）の人だけ'),
     q('kind', 'followups の種類: waiting=返事待ち, today=今日（期限切れ含む）連絡する人, not_followed=参加後未フォロー, status=状態で絞る',
       { schema: { type: 'string', enum: ['waiting', 'today', 'not_followed', 'status'] } }),
     q('source_type', '候補の入口 PLAUD/ボイスメモ/LINE画像/画像メモ/貼り付け'),
