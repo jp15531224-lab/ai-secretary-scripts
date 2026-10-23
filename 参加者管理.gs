@@ -29,7 +29,7 @@ const RECORD_SHEET = '参加記録';
 const CANDIDATE_SHEET = '確認待ち候補';
 const PERSON_HEADERS = ['人物ID', '氏名', '読み', '区別メモ', '登録日時'];
 const RECORD_HEADERS = ['記録ID', '人物ID', '氏名', 'セミナーID', '開催日', '時間', '種別', '講師', '地域', '会場',
-  '案内日', '連絡手段', '返事', '状態', '次回連絡日', 'フォロー状況', 'メモ', '登録日時', '更新日時', '印'];
+  '案内日', '連絡手段', '返事', '状態', '次回連絡日', 'フォロー状況', 'メモ', '登録日時', '更新日時', '印', 'グループ'];
 const CANDIDATE_HEADERS = ['候補ID', '入口', '資料', '重複キー', '根拠', '氏名', '人物ID', 'セミナーID', 'セミナー表示',
   '提案状態', '次回連絡日', 'メモ', '確認状態', '記録ID', '作成日時'];
 const HISTORY_SHEET = '変更履歴';
@@ -305,6 +305,7 @@ function seminarRoster_(ss, p) {
     .sort((a, b) => STATUS_ORDER.indexOf(a['状態']) - STATUS_ORDER.indexOf(b['状態'])
       || (newFirst ? newRank_(a) - newRank_(b) : 0)
       || String(a['氏名']).localeCompare(String(b['氏名']), 'ja'));
+  const inSem = readObjects_(ss, RECORD_SHEET, RECORD_HEADERS).filter(r => r['セミナーID'] === s.seminar_id);
   const header = { date: s.date, time: s.start + (s.end ? '〜' + s.end : ''), lecturer: s.lecturer, type: s.type,
                    pref: s.pref, venue: s.venue, organizer: s.organizer, canceled: s.canceled, in_list: s.in_list };
   const res = { seminar_id: s.seminar_id, header: header, count: rows.length,
@@ -314,18 +315,26 @@ function seminarRoster_(ss, p) {
                 ticket_attending: rows.filter(r => ATTENDING.indexOf(r['状態']) >= 0 && hasTicket_(r)).length,
                 ticket_spare: rows.filter(ticketSpare_).map(r => r['氏名']),
                 leaders: rows.filter(r => r['状態'] === LEADER).map(r => r['氏名']),
-                participants: rows.map(r => ({ name: r['氏名'], mark: r['印'] || '', is_new: isNew_(r), new_kind: newKind_(r['印']),
+                participants: rows.map(r => ({ name: r['氏名'], group: r['グループ'] || '', mark: r['印'] || '', is_new: isNew_(r), new_kind: newKind_(r['印']),
                                               ticket: hasTicket_(r), ticket_spare: ticketSpare_(r), status: r['状態'],
                                               record_id: r['記録ID'], next_contact: r['次回連絡日'] })) };
+  // グループ（リーダー）ごとの名簿。LINEの名簿と同じ並び
+  res.groups = groupRows_(rows, inSem).map(x => ({ group: x.group, leader_status: x.leader_status,
+    attending: x.members.filter(r => ATTENDING.indexOf(r['状態']) >= 0).length,
+    members: x.members.map(r => ({ name: r['氏名'], mark: r['印'] || '', status: r['状態'] })) }));
   if (p.format === 'pdf') {
     const head = [['開催日', s.date], ['時間', header.time], ['講師', s.lecturer], ['種別', s.type], ['地域', s.pref],
                   ['会場', s.venue + (s.canceled ? '（中止）' : '')]];
+    const row_ = (r, i) => '<tr><td>' + i + '</td><td>' + esc_(r['氏名']) + '</td><td>'
+      + ({ '登録済み新規': '◯ 登録済み新規', '未登録新規': '◎ 未登録新規' }[newKind_(r['印'])] || '')
+      + '</td><td>' + (ticketSpare_(r) ? 'チケット余り' : hasTicket_(r) ? '※ 確保済み' : '')
+      + '</td><td>' + esc_(r['状態']) + '</td></tr>';
+    let no = 0;  // グループ（リーダー）ごとに見出し行を入れる
+    const body = groupRows_(rows, inSem).map(x => '<tr><th colspan="5">' + esc_(x.group) + '</th></tr>'
+      + x.members.map(r => row_(r, ++no)).join('')).join('');
     const table = '<table class="h">' + head.map(h => '<tr><th>' + h[0] + '</th><td>' + esc_(h[1]) + '</td></tr>').join('') + '</table>'
       + '<h2>参加者（' + rows.length + '名）</h2><table><tr><th>No</th><th>氏名</th><th>新規</th><th>チケット</th><th>状態</th></tr>'
-      + rows.map((r, i) => '<tr><td>' + (i + 1) + '</td><td>' + esc_(r['氏名']) + '</td><td>'
-        + ({ '登録済み新規': '◯ 登録済み新規', '未登録新規': '◎ 未登録新規' }[newKind_(r['印'])] || '')
-        + '</td><td>' + (ticketSpare_(r) ? 'チケット余り' : hasTicket_(r) ? '※ 確保済み' : '')
-        + '</td><td>' + esc_(r['状態']) + '</td></tr>').join('') + '</table>'
+      + body + '</table>'
       + '<p>◎ 未登録新規　◯⭐ 登録済み新規（あまりセミナーに行っていない人）　※ チケット確保済み　チケット余り＝チケット確保済みで不参加になった人</p>';
     const f = savePdf_(ss, '参加者名簿（' + s.date + ' ' + s.type + ' ' + s.lecturer + '）', table,
       '名簿_' + Utilities.formatDate(parseDate_(s.date) || new Date(), TZ, 'yyyyMMdd') + '_' + s.type + '_' + norm_(s.lecturer));
@@ -592,6 +601,26 @@ function parseEntry_(raw) {
   return { name: n, mark: mark, leader: leader, is_new: NEW_MARK_RE.test(mark), new_kind: newKind_(mark), ticket: TICKET_MARK_RE.test(mark) };
 }
 
+// 「石原GMさん」「（石原GM）」→「石原GM」
+function groupName_(v) {
+  return String(v || '').trim().replace(/^[（(](.+)[）)]$/, '$1').replace(/(さん|様|さま)$/, '').replace(MARK_TAIL_RE, '').trim();
+}
+function lastGroup_(records, personId) {
+  const g = records.filter(r => r['人物ID'] === personId && r['グループ']).map(r => r['グループ']);
+  return g.length ? g[g.length - 1] : '';
+}
+// 名簿をグループ（リーダー）ごとにまとめる。グループの順番は名簿に最初に出てきた順、リーダー本人を先頭に
+function groupRows_(rows, all) {
+  const order = [];
+  all.forEach(r => { const g = r['グループ'] || '（グループ未設定）'; if (order.indexOf(g) < 0) order.push(g); });
+  return order.map(g => {
+    const members = rows.filter(r => (r['グループ'] || '（グループ未設定）') === g)
+      .sort((a, b) => (a['氏名'] === g ? -1 : 0) - (b['氏名'] === g ? -1 : 0));
+    const lead = members.filter(r => r['氏名'] === g)[0];
+    return { group: g, leader_status: lead ? lead['状態'] : '', members: members };
+  }).filter(x => x.members.length);
+}
+
 function isNew_(r) { return NEW_MARK_RE.test(String(r['印'] || '')); }
 // 新規の種類：◎＝未登録新規、◯⭐など＝登録済み新規、印なし＝''
 function newKind_(mark) {
@@ -640,6 +669,9 @@ function changeOne_(ss, p, s, name, intent, res, records, mark) {
   }
   const rec = records.filter(r => r['人物ID'] === person['人物ID'] && r['セミナーID'] === s.seminar_id)[0];
   const info = changeInfo_(p);
+  // グループ＝その人が属するリーダー（例：石原GM）。リーダー本人は自分の名前。指定が無ければ本人の直近のグループを引き継ぐ
+  const group = intent === 'leader' ? person['氏名']
+    : groupName_(p.group) || (rec && rec['グループ']) || lastGroup_(records, person['人物ID']);
   if (intent === 'join' || intent === 'leader') {
     const status = intent === 'leader' ? LEADER : '参加予定';
     if (!rec) {
@@ -647,7 +679,7 @@ function changeOne_(ss, p, s, name, intent, res, records, mark) {
         '記録ID': newId_('R'), '人物ID': person['人物ID'], '氏名': person['氏名'], 'セミナーID': s.seminar_id,
         '開催日': s.date, '時間': s.start + (s.end ? '\n' + s.end : ''), '種別': s.type, '講師': s.lecturer, '地域': s.pref, '会場': s.venue,
         '案内日': '', '連絡手段': p.channel || '', '返事': '', '状態': status, '次回連絡日': '', 'フォロー状況': '',
-        'メモ': info.source ? '出典：' + info.source : '', '登録日時': now_(), '更新日時': now_(), '印': mark || '',
+        'メモ': info.source ? '出典：' + info.source : '', '登録日時': now_(), '更新日時': now_(), '印': mark || '', 'グループ': group,
       };
       appendObject_(ss, RECORD_SHEET, RECORD_HEADERS, r);
       records.push(r);
@@ -657,8 +689,11 @@ function changeOne_(ss, p, s, name, intent, res, records, mark) {
     }
     const before = rec['状態'];
     const merged = mergeMark_(rec['印'], mark);  // 印は足すだけ（印なしの名簿では消さない）
-    const markChanged = merged !== String(rec['印'] || '');
+    let markChanged = merged !== String(rec['印'] || '');
     if (markChanged) { logChange_(ss, '印', rec, rec['印'], merged, info); rec['印'] = merged; }
+    if (group && group !== String(rec['グループ'] || '')) {  // グループの変更も同じ保存でまとめて書く
+      logChange_(ss, 'グループ', rec, rec['グループ'], group, info); rec['グループ'] = group; markChanged = true;
+    }
     if (intent === 'leader') {
       if (before === LEADER) {
         if (markChanged) { rec['更新日時'] = now_(); saveRow_(sheet_(ss, RECORD_SHEET, RECORD_HEADERS), RECORD_HEADERS, rec); }
@@ -992,7 +1027,7 @@ function addAttendanceParams_(get) {
     q('invited_on', '案内日 yyyy-mm-dd'), q('channel', '連絡手段 LINE/電話'), q('reply', '返事の内容'),
     q('next_contact', '次回連絡日 yyyy-mm-dd。update で消す時は clear'), q('memo', 'メモ（update では追記）'), q('memo_mode', 'replace でメモを上書き'),
     q('record_id', '記録ID（確認で選ばれた時）'), q('follow', 'フォロー状況 未フォロー/済み'),
-    q('sort', 'roster：new で 未登録新規（◎）→登録済み新規（◯⭐）→その他 の順'), q('new_only', 'roster：true で新規（◎◯⭐）の人だけ'),
+    q('group', '追加する人のグループ（リーダー名。例：石原GM）。「石原GMの〇〇参加」の時に指定'), q('sort', 'roster：new で 未登録新規（◎）→登録済み新規（◯⭐）→その他 の順'), q('new_only', 'roster：true で新規（◎◯⭐）の人だけ'),
     q('kind', 'followups の種類: waiting=返事待ち, today=今日（期限切れ含む）連絡する人, not_followed=参加後未フォロー, status=状態で絞る',
       { schema: { type: 'string', enum: ['waiting', 'today', 'not_followed', 'status'] } }),
     q('source_type', '候補の入口 PLAUD/ボイスメモ/LINE画像/画像メモ/貼り付け'),

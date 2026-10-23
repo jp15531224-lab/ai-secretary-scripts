@@ -99,6 +99,8 @@ LINEの文章・名簿を貼るだけで台帳が更新される。Claude Code�
     - ◎＝未登録新規、◯○〇⚪・⭐★☆＝登録済み新規（new_kind。どちらも is_new=true）
     - ※＝チケット確保済み（ticket=true）。チケット確保済みの人がキャンセル・辞退になると「チケット余り」（ticket_spare。roster の ticket_spare、apply の ticket_spare_names / counts.ticket_spare_now、変更履歴の操作「不参加（チケット余り）」）
   - apply / roster_sync の join・names には名簿の書き方のまま（括弧・印つき）渡してよい。サーバー側で読み分ける。
+  - グループ（リーダー）：参加記録の「グループ」列。apply に group=石原GM を付けると、その人を石原GMのグループに入れる（音声「11/1 大正区民ホールのPBS、石原GMの山田さん参加」）。リーダー本人は自分の名前、指定が無ければ本人の直近のグループを引き継ぐ。名簿を貼られた時は Claude が行ごと（リーダーごと）に group を付けて apply する。
+  - roster は groups（グループ順・リーダー先頭の名簿）も返し、PDFもグループごとの見出し付き。
   - roster は各参加者に mark・is_new を返し、attending・new_attending・leaders も返す。sort=new で新規を先頭、new_only=true で新規だけ。PDFにも「新規」列。
 - 「変更履歴」シートに、変更前・変更後・日時・理由・出典を1件ずつ残す（登録・状態変更・氏名訂正すべて）。
 - セミナー指定なしの leave は、本人の今後の予定が1件ならそれを対象にする（複数なら選択肢を返す）。join は直近24時間に扱ったセミナー。
