@@ -255,8 +255,9 @@ function doGet(e) {
   const lecturers = lecturerMap_(ss);
   const items = rows.slice(0, MAX_ROWS).map(r => toItem_(r, lecturers));
   const res = { count: rows.length, returned: items.length, conditions: describe_(p), items: items };
-  if (p.format === 'pdf') {
-    const file = makePdf_(ss, rows, res.conditions, lecturers);
+  if (p.format === 'pdf' || p.format === 'calendar') {
+    const file = p.format === 'calendar' ? makeCalendarPdf_(ss, rows, res.conditions, lecturers)
+      : makePdf_(ss, rows, res.conditions, lecturers);
     res.pdf_url = file.getUrl();
     res.pdf_name = file.getName();
   }
@@ -357,6 +358,76 @@ function makePdf_(ss, rows, title, lecturers) {
   return getSubFolder_(ss, PDF_FOLDER).createFile(blob);
 }
 
+// カレンダー形式のPDF（format=calendar）。月ごとに1ページ、日曜はじまり。
+// 1回ごとに講師の顔写真を大きく出し、その下に時間・種別・講師名（都道府県）・会場を書く。一言は一覧PDFの方に載せる。
+function makeCalendarPdf_(ss, rows, title, lecturers) {
+  const esc = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const map = lecturers || lecturerMap_(ss);
+  const photos = {};
+  const byDay = {};
+  rows.forEach(r => {
+    const d = parseDate_(r[0]);
+    if (!d) return;
+    const k = Utilities.formatDate(d, TZ, 'yyyyMMdd');
+    (byDay[k] = byDay[k] || []).push(r);
+  });
+  const months = Object.keys(byDay).map(k => k.slice(0, 6)).filter((m, i, a) => a.indexOf(m) === i).sort();
+
+  const card = r => {
+    const t = String(r[1]).split('\n');
+    const ls = lecturersOf_(r[3], map);
+    const canceled = String(r[5]).indexOf('（中止）') >= 0;
+    const imgs = ls.map(l => {
+      const src = lecturerPhoto_(l.photo, photos);
+      return src ? '<img class="' + (ls.length > 1 ? 'f2' : 'f1') + '" src="' + src + '">' : '';
+    }).join('');
+    return '<div class="ev' + (canceled ? ' cx' : '') + '">'
+      + (imgs ? '<div class="ph">' + imgs + '</div>' : '')
+      + '<div class="tm">' + esc(t[0] || '') + (t[1] ? '〜' + esc(t[1]) : '') + ' <b class="ty">' + esc(r[2]) + '</b>'
+      + (canceled ? ' <b class="cl">中止</b>' : '') + '</div>'
+      + '<div class="nm">' + ls.map(l => esc(l.display)).join('<br>') + '</div>'
+      + '<div class="vn">' + esc(String(r[4]).replace(/[都道府県]$/, '')) + '・' + esc(String(r[5]).replace('（中止）', '')) + '</div>'
+      + '</div>';
+  };
+
+  const pages = months.map((ym, mi) => {
+    const y = Number(ym.slice(0, 4)), m = Number(ym.slice(4, 6));
+    const first = new Date(y, m - 1, 1), days = new Date(y, m, 0).getDate();
+    const cells = [];
+    for (let i = 0; i < first.getDay(); i++) cells.push('<td class="em"></td>');
+    for (let day = 1; day <= days; day++) {
+      const dow = (first.getDay() + day - 1) % 7;
+      const evs = byDay[ym + ('0' + day).slice(-2)] || [];
+      cells.push('<td class="dy' + (dow === 0 ? ' su' : dow === 6 ? ' sa' : '') + (evs.length ? '' : ' no') + '">'
+        + '<div class="dn">' + day + '</div>' + evs.map(card).join('') + '</td>');
+    }
+    while (cells.length % 7) cells.push('<td class="em"></td>');
+    let body = '';
+    for (let i = 0; i < cells.length; i += 7) body += '<tr>' + cells.slice(i, i + 7).join('') + '</tr>';
+    const count = Object.keys(byDay).filter(k => k.slice(0, 6) === ym).reduce((n, k) => n + byDay[k].length, 0);
+    return '<div class="pg"' + (mi ? ' style="page-break-before:always"' : '') + '>'
+      + '<h1>' + y + '年' + m + '月　<span class="sub">全厚済セミナー（' + esc(title) + '）' + count + '件</span></h1>'
+      + '<table class="cal"><tr>' + WEEK.map((w, i) => '<th class="' + (i === 0 ? 'su' : i === 6 ? 'sa' : '') + '">' + w + '</th>').join('') + '</tr>'
+      + body + '</table></div>';
+  }).join('');
+
+  const html = '<html><head><meta charset="utf-8"><style>'
+    + 'body{font-family:sans-serif;font-size:7pt;margin:0}h1{font-size:15pt;margin:0 0 6px}span.sub{font-size:8.5pt;color:#555;font-weight:normal}'
+    + 'table.cal{border-collapse:collapse;width:100%;table-layout:fixed}table.cal tr{page-break-inside:avoid}div.ev{page-break-inside:avoid}'
+    + 'table.cal th{background:#2f4f6f;color:#fff;font-size:8pt;padding:3px}table.cal th.su{background:#b03a3a}table.cal th.sa{background:#2f5fa0}'
+    + 'table.cal td{border:1px solid #bbb;vertical-align:top;padding:2px;height:62px}td.em{background:#f4f4f4}td.no{background:#fbfbfb}'
+    + 'div.dn{font-weight:bold;font-size:9pt;color:#333}td.su div.dn{color:#c0392b}td.sa div.dn{color:#2a62b8}'
+    + 'div.ev{border:1px solid #c9d6e3;border-radius:4px;background:#f3f7fb;margin:2px 0 3px;padding:2px;text-align:center}'
+    + 'div.ev.cx{background:#eee;color:#888;border-color:#ccc}div.ph{margin:1px 0}'
+    + 'img.f1{width:64px;height:64px;border-radius:6px}img.f2{width:40px;height:40px;border-radius:5px;margin:0 1px}'
+    + 'div.tm{font-size:6.8pt}b.ty{color:#2f4f6f}b.cl{color:#b03a3a}div.nm{font-weight:bold;font-size:7pt;line-height:1.25}div.vn{font-size:6pt;color:#555}'
+    + '</style></head><body>' + (pages || '<p>該当するセミナーはありません。</p>') + '</body></html>';
+  const name = 'セミナーカレンダー_' + title.replace(/[\\\/:*?"<>|\s]/g, '_') + '_'
+    + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd_HHmm') + '.pdf';
+  const blob = Utilities.newBlob(html, 'text/html', 'calendar.html').getAs(MimeType.PDF).setName(name);
+  return getSubFolder_(ss, PDF_FOLDER).createFile(blob);
+}
+
 function describe_(p) {
   const parts = [];
   if (p.month) parts.push(p.month.replace('-', '年') + '月');
@@ -419,7 +490,7 @@ function chatgptSettings() {
       { name: 'lecturer', in: 'query', schema: { type: 'string' }, description: '講師名（部分一致）' },
       { name: 'venue', in: 'query', schema: { type: 'string' }, description: '会場名（部分一致）' },
       { name: 'include_canceled', in: 'query', schema: { type: 'string', enum: ['true', 'false'] }, description: '中止の回を含めるか。既定 true' },
-      { name: 'format', in: 'query', schema: { type: 'string', enum: ['json', 'pdf'] }, description: 'pdf を指定するとPDFを作成しURLを返す' },
+      { name: 'format', in: 'query', schema: { type: 'string', enum: ['json', 'pdf', 'calendar'] }, description: 'pdf=一覧表のPDF、calendar=顔写真入りカレンダーのPDF。作成しURLを返す' },
     ],
     responses: { '200': { description: '検索結果' } },
   } };
@@ -428,7 +499,7 @@ function chatgptSettings() {
     'あなたはJPの秘書です。全厚済セミナーの予定を seminarApi アクションで調べて答えます。',
     '・「PBSだけ」「大阪だけ」「12月」「来月」などの条件を type / pref / month に変換して呼び出す。月は今日の日付から yyyy-mm に直す。',
     '・「1月」のように月だけ言われたら、今日以降で一番近いその月（例：今が2026年10月なら2027年1月）として扱う。',
-    '・「PDFにして」「PDFで」と言われたら format=pdf で呼び出し、返ってきた pdf_url を伝える。',
+    '・「PDFにして」「PDFで」と言われたら format=pdf で呼び出し、返ってきた pdf_url を伝える。「カレンダーで」「カレンダーに落とし込んで」なら format=calendar（顔写真入りの月間カレンダーPDF）。自分でカレンダーを作り直さない。',
     '・回答の並びは必ず「開催日｜時間（開始〜終了）｜種別｜講師名｜都道府県｜会場｜主催者」。',
     '・音声で読み上げるときは、件数を先に言い、そのあと日付順に「日付・時間・講師・会場」を簡潔に読む。10件を超えるときは最初の10件を読み、残りは画面のリストかPDFを案内する。',
     '・中止の回（canceled=true）は必ず「中止」と伝える。',
