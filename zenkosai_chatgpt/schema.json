@@ -124,10 +124,14 @@
                 "candidates",
                 "candidate_confirm",
                 "memos",
-                "memo_done"
+                "memo_done",
+                "apply",
+                "roster_sync",
+                "changes",
+                "person_rename"
               ]
             },
-            "description": "search=一覧検索(既定) / register=参加登録 / update=変更 / roster=セミナー別名簿 / history=人別履歴 / followups=連絡リスト / people=人物検索 / candidate_add=確認待ち候補を保存 / candidates=候補一覧 / candidate_confirm=候補の承認・却下 / memos=ドライブのボイスメモ・PLAUDを読む / memo_done=資料を処理済みにする"
+            "description": "apply=参加者の追加・不参加・再参加（まとめて可）/ roster_sync=名簿と照合 / changes=変更履歴 / person_rename=氏名の訂正 / search=一覧検索(既定) / register=参加登録 / update=変更 / roster=セミナー別名簿 / history=人別履歴 / followups=連絡リスト / people=人物検索 / candidate_add=確認待ち候補を保存 / candidates=候補一覧 / candidate_confirm=候補の承認・却下 / memos=ドライブのボイスメモ・PLAUDを読む / memo_done=資料を処理済みにする"
           },
           {
             "name": "seminar_id",
@@ -391,6 +395,74 @@
               "type": "string"
             },
             "description": "memo_done の候補数"
+          },
+          {
+            "name": "join",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "apply：参加予定にする人（追加・再参加）。「、」区切りで複数可"
+          },
+          {
+            "name": "leave",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "apply：不参加にする人（来られない・外す・キャンセル）。「、」区切り"
+          },
+          {
+            "name": "undecided",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "apply：参加か不参加か判断できない人（確認待ちに入る）。「、」区切り"
+          },
+          {
+            "name": "names",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "roster_sync：名簿に載っている全員。「、」区切り"
+          },
+          {
+            "name": "complete",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "description": "roster_sync：最新の完全な名簿だとJPが確認した時だけ true（名簿に無い参加予定者を不参加にする）"
+          },
+          {
+            "name": "reason",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "変更理由（例：LINE「仕事で行けなくなりました」）。履歴に残る"
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "確認済みで大量の不参加や同名への訂正を実行する時だけ true"
+          },
+          {
+            "name": "new_name",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "person_rename の正しい氏名"
           }
         ],
         "responses": {
