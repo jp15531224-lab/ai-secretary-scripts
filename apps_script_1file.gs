@@ -49,6 +49,7 @@ const WEEK = ['日', '月', '火', '水', '木', '金', '土'];
 const PDF_FOLDER = 'PDF出力';
 const GPT_SHEET_NAME = 'ChatGPT設定';
 const MAX_ROWS = 300;           // 1回の応答で返す最大件数
+const LECTURER_SHEET_NAME = '講師';  // 講師名・都道府県・表示名・一言・写真ファイルID（講師一覧のスクショから登録）
 
 function setup() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -251,10 +252,11 @@ function doGet(e) {
 
   const ss = SpreadsheetApp.openById(props.getProperty('SHEET_ID'));
   const rows = filterRows_(readRows_(getListSheet_(ss)), p);
-  const items = rows.slice(0, MAX_ROWS).map(toItem_);
+  const lecturers = lecturerMap_(ss);
+  const items = rows.slice(0, MAX_ROWS).map(r => toItem_(r, lecturers));
   const res = { count: rows.length, returned: items.length, conditions: describe_(p), items: items };
   if (p.format === 'pdf') {
-    const file = makePdf_(ss, rows, res.conditions);
+    const file = makePdf_(ss, rows, res.conditions, lecturers);
     res.pdf_url = file.getUrl();
     res.pdf_name = file.getName();
   }
@@ -283,20 +285,69 @@ function filterRows_(rows, p) {
   });
 }
 
-function toItem_(r) {
+function toItem_(r, lecturers) {
   const t = String(r[1]).split('\n');
   return { seminar_id: seminarId_(r), date: r[0], start: t[0] || '', end: t[1] || '', type: r[2], lecturer: r[3],
+           lecturer_info: lecturersOf_(r[3], lecturers || {}).map(l => ({ display: l.display, motto: l.motto })),
            pref: r[4], venue: r[5], organizer: r[6], canceled: String(r[5]).indexOf('（中止）') >= 0 };
 }
 
-function makePdf_(ss, rows, title) {
+// ===== 講師（「講師」シート） =====
+// 一覧の講師名（「林田 啓明、大坪 仁」のような複数人や「小林 智子（群馬県）」も可）を1人ずつ講師シートと照らし合わせる。
+// 講師シートに無い人は名前だけを返す（推測で他の人の写真を付けない）。
+
+function lecturerKey_(name) {
+  return String(name || '').replace(/（[^）]*）|\([^)]*\)/g, '').replace(/[\s　]/g, '');
+}
+
+function lecturerMap_(ss) {
+  const sh = ss.getSheetByName(LECTURER_SHEET_NAME);
+  const map = {};
+  if (!sh || sh.getLastRow() < 2) return map;
+  sh.getRange(2, 1, sh.getLastRow() - 1, 5).getDisplayValues().forEach(r => {
+    if (!r[0]) return;
+    map[lecturerKey_(r[0])] = { name: r[0], pref: r[1], display: r[2] || lecturerKey_(r[0]) + (r[1] ? '（' + r[1] + '）' : ''),
+                               motto: r[3], photo: r[4] };
+  });
+  return map;
+}
+
+function lecturersOf_(text, map) {
+  return String(text || '').split(/[、,，]/).map(n => n.trim()).filter(Boolean)
+    .map(n => map[lecturerKey_(n)] || { name: n, display: n, motto: '', photo: '' });
+}
+
+// 写真はドライブの非公開ファイルのまま、PDFに埋め込む（共有設定は変えない）
+function lecturerPhoto_(id, cache) {
+  if (!id) return '';
+  if (!(id in cache)) {
+    try {
+      const b = DriveApp.getFileById(id).getBlob();
+      cache[id] = 'data:' + b.getContentType() + ';base64,' + Utilities.base64Encode(b.getBytes());
+    } catch (err) {
+      cache[id] = '';
+    }
+  }
+  return cache[id];
+}
+
+function makePdf_(ss, rows, title, lecturers) {
   const esc = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const body = rows.map(r => '<tr>' + [r[0], esc(r[1]).replace('\n', '<br>'), r[2], r[3], r[4], r[5], r[6]]
-    .map((v, i) => '<td' + (i === 1 ? ' class="t"' : '') + '>' + (i === 1 ? v : esc(v)) + '</td>').join('') + '</tr>').join('');
+  const photos = {};
+  // 講師欄：写真を名前の横、一言を名前の下に
+  const lecturerCell = text => lecturersOf_(text, lecturers || lecturerMap_(ss)).map(l => {
+    const src = lecturerPhoto_(l.photo, photos);
+    return '<table class="l"><tr><td class="lp">' + (src ? '<img src="' + src + '">' : '') + '</td><td>'
+      + '<b>' + esc(l.display) + '</b>' + (l.motto ? '<br><span class="m">' + esc(l.motto) + '</span>' : '') + '</td></tr></table>';
+  }).join('');
+  const body = rows.map(r => '<tr>' + [r[0], esc(r[1]).replace('\n', '<br>'), r[2], lecturerCell(r[3]), r[4], r[5], r[6]]
+    .map((v, i) => '<td' + (i === 1 ? ' class="t"' : i === 3 ? ' class="lc"' : '') + '>' + (i === 1 || i === 3 ? v : esc(v)) + '</td>').join('') + '</tr>').join('');
   const html = '<html><head><meta charset="utf-8"><style>'
     + 'body{font-family:sans-serif;font-size:9pt}h1{font-size:13pt}'
     + 'table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:3px 4px;vertical-align:middle}'
-    + 'th{background:#eee}td.t{text-align:center;white-space:nowrap}</style></head><body>'
+    + 'th{background:#eee}td.t{text-align:center;white-space:nowrap}td.lc{width:34%}'
+    + 'table.l{width:100%;border:none}table.l td{border:none;padding:1px 2px}td.lp{width:40px}td.lp img{width:38px;height:38px;border-radius:4px}'
+    + 'span.m{font-size:7.5pt;color:#555}</style></head><body>'
     + '<h1>全厚済セミナー一覧（' + esc(title) + '）</h1>'
     + '<p>' + rows.length + '件　作成：' + Utilities.formatDate(new Date(), TZ, 'yyyy/MM/dd HH:mm') + '</p>'
     + '<table><tr>' + HEADERS.map(h => '<th>' + h + '</th>').join('') + '</tr>' + body + '</table></body></html>';
@@ -383,6 +434,7 @@ function chatgptSettings() {
     '・中止の回（canceled=true）は必ず「中止」と伝える。',
     '・会場名の「…※」は元画面で名前が切れている印。推測で補わない。',
     '・データに無いことは推測せず「一覧に無い」と答える。',
+    '・講師は lecturer_info の display（例：青木弘幸（群馬県））で示し、motto（一言）があれば名前の下に添える。lecturer_info に無い情報は補わない。',
   ].join('\n') + attendanceInstructions_();
   sh.getRange('A3:B5').setValues([
     ['使い方', 'ChatGPT → GPTを作成 → 構成：「指示」にB4、アクション →「スキーマ」にB5を貼る（認証：なし）'],
