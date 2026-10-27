@@ -355,6 +355,10 @@ function makePdf_(ss, rows, title, lecturers) {
   return getSubFolder_(ss, PDF_FOLDER).createFile(blob);
 }
 
+// 種別ごとの色（カードの枠と種別の文字に使う）。ここに無い種別は灰色。
+const TYPE_COLORS = { PBS: '#d9480f', BE: '#1c6dd0', BT: '#2b8a3e', BS: '#8e44ad', 'コンベンション': '#b8860b' };
+const typeColor_ = t => TYPE_COLORS[String(t).toUpperCase()] || TYPE_COLORS[String(t)] || '#666666';
+
 // カレンダー形式のPDF（format=calendar）。月ごとに1ページ、日曜はじまり。
 // 1回ごとに講師の顔写真を大きく出し、その下に時間・種別・講師名（都道府県）・会場を書く。一言は一覧PDFの方に載せる。
 function makeCalendarPdf_(ss, rows, title, lecturers) {
@@ -378,9 +382,10 @@ function makeCalendarPdf_(ss, rows, title, lecturers) {
       const src = lecturerPhoto_(l.photo, photos);
       return src ? '<img class="' + (ls.length > 1 ? 'f2' : 'f1') + '" src="' + src + '">' : '';
     }).join('');
-    return '<div class="ev' + (canceled ? ' cx' : '') + '">'
+    const c = typeColor_(r[2]);
+    return '<div class="ev' + (canceled ? ' cx' : '') + '" style="border-color:' + c + '">'
       + (imgs ? '<div class="ph">' + imgs + '</div>' : '')
-      + '<div class="tm">' + esc(t[0] || '') + (t[1] ? '〜' + esc(t[1]) : '') + ' <b class="ty">' + esc(r[2]) + '</b>'
+      + '<div class="tm">' + esc(t[0] || '') + (t[1] ? '〜' + esc(t[1]) : '') + ' <b class="ty" style="color:' + c + '">' + esc(r[2]) + '</b>'
       + (canceled ? ' <b class="cl">中止</b>' : '') + '</div>'
       + '<div class="nm">' + ls.map(l => esc(l.display)).join('<br>') + '</div>'
       + '<div class="vn">' + esc(String(r[4]).replace(/[都道府県]$/, '')) + '・' + esc(String(r[5]).replace('（中止）', '')) + '</div>'
@@ -401,9 +406,13 @@ function makeCalendarPdf_(ss, rows, title, lecturers) {
     while (cells.length % 7) cells.push('<td class="em"></td>');
     let body = '';
     for (let i = 0; i < cells.length; i += 7) body += '<tr>' + cells.slice(i, i + 7).join('') + '</tr>';
+    const types = [];
+    Object.keys(byDay).filter(k => k.slice(0, 6) === ym)
+      .forEach(k => byDay[k].forEach(r => { if (types.indexOf(r[2]) < 0) types.push(r[2]); }));
+    const legend = types.map(t => '<b style="color:' + typeColor_(t) + '">■' + esc(t) + '</b>').join('　');
     const count = Object.keys(byDay).filter(k => k.slice(0, 6) === ym).reduce((n, k) => n + byDay[k].length, 0);
     return '<div class="pg"' + (mi ? ' style="page-break-before:always"' : '') + '>'
-      + '<h1>' + y + '年' + m + '月　<span class="sub">全厚済セミナー（' + esc(title) + '）' + count + '件</span></h1>'
+      + '<h1>' + y + '年' + m + '月　<span class="sub">全厚済セミナー（' + esc(title) + '）' + count + '件</span>　<span class="lg">' + legend + '</span></h1>'
       + '<table class="cal"><tr>' + WEEK.map((w, i) => '<th class="' + (i === 0 ? 'su' : i === 6 ? 'sa' : '') + '">' + w + '</th>').join('') + '</tr>'
       + body + '</table></div>';
   }).join('');
@@ -416,10 +425,10 @@ function makeCalendarPdf_(ss, rows, title, lecturers) {
     + 'table.cal th.su{color:#c0392b;border-bottom-color:#c0392b}table.cal th.sa{color:#2a62b8;border-bottom-color:#2a62b8}'
     + 'table.cal td{border:1px solid #bbb;vertical-align:top;padding:2px;height:62px}td.em{background:#f4f4f4}td.no{background:#fbfbfb}'
     + 'div.dn{font-weight:bold;font-size:9pt;color:#333}td.su div.dn{color:#c0392b}td.sa div.dn{color:#2a62b8}'
-    + 'div.ev{border:1px solid #c9d6e3;border-radius:4px;background:#f3f7fb;margin:2px 0 3px;padding:2px;text-align:center}'
-    + 'div.ev.cx{border:1px dashed #c0392b}div.ev.cx div.tm,div.ev.cx div.nm,div.ev.cx div.vn{color:#999}div.ph{margin:1px 0}'
+    + 'div.ev{border:2px solid #999;border-top-width:5px;border-radius:4px;margin:2px 0 3px;padding:2px;text-align:center}'
+    + 'div.ev.cx{border-style:dashed}span.lg{font-size:10pt}div.ev.cx div.tm,div.ev.cx div.nm,div.ev.cx div.vn{color:#999}div.ph{margin:1px 0}'
     + 'img.f1{width:44px;height:44px;border-radius:5px}img.f2{width:32px;height:32px;border-radius:4px;margin:0 1px}'
-    + 'div.tm{font-size:8pt}b.ty{color:#2f4f6f}b.cl{color:#b03a3a}div.nm{font-weight:bold;font-size:8.5pt;line-height:1.25}div.vn{font-size:7pt;color:#444;line-height:1.2}'
+    + 'div.tm{font-size:8pt}b.ty{font-size:9pt}b.cl{color:#b03a3a}div.nm{font-weight:bold;font-size:8.5pt;line-height:1.25}div.vn{font-size:7pt;color:#444;line-height:1.2}'
     + '</style></head><body>' + (pages || '<p>該当するセミナーはありません。</p>') + '</body></html>';
   const name = 'セミナーカレンダー_' + title.replace(/[\\\/:*?"<>|\s]/g, '_') + '_'
     + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd_HHmm') + '.pdf';
