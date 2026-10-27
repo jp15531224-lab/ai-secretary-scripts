@@ -94,7 +94,10 @@ function importInbox_(ss) {
   const list = [];
   while (files.hasNext()) {
     const file = files.next();
-    if (/\.csv$/i.test(file.getName()) || file.getMimeType() === MimeType.CSV) list.push(file);
+    if (!/\.csv$/i.test(file.getName()) && file.getMimeType() !== MimeType.CSV) continue;
+    // 「集中会場…csv」は一覧ではなく集中会場シートを丸ごと入れ替える
+    if (/^集中会場/.test(file.getName())) { importFocus_(ss, file); file.moveTo(done); continue; }
+    list.push(file);
   }
   // 撮り直しの新しい方が後から効くよう、置いた順に処理する
   list.sort((a, b) => a.getDateCreated() - b.getDateCreated());
@@ -161,6 +164,7 @@ function sortAndFormat_(ss) {
   sh.getRange(1, 1, n + 1, HEADERS.length).setVerticalAlignment('middle');
   sh.getRange(2, 2, n, 1).setWrap(true).setHorizontalAlignment('center');
   sh.autoResizeColumns(1, HEADERS.length);
+  paintFocus_(ss, sh, rows);
 }
 
 function normalizeRow_(r) {
@@ -247,14 +251,20 @@ function doGet(e) {
   const p = (e && e.parameter) || {};
   const props = PropertiesService.getScriptProperties();
   if (!p.token || p.token !== props.getProperty('API_TOKEN')) return json_({ error: 'unauthorized' });
+  if (p.action === 'focus') return json_(listFocus_(SpreadsheetApp.openById(props.getProperty('SHEET_ID'))));
   if (e.pathInfo || (p.action && p.action !== 'search')) return handleAttendance_(e);  // 参加者管理（参加者管理.gs）
 
   const ss = SpreadsheetApp.openById(props.getProperty('SHEET_ID'));
-  const rows = filterRows_(readRows_(getListSheet_(ss)), p);
-  const items = rows.slice(0, MAX_ROWS).map(toItem_);
-  const res = { count: rows.length, returned: items.length, conditions: describe_(p), items: items };
+  const rules = readFocus_(ss);
+  let rows = filterRows_(readRows_(getListSheet_(ss)), p);
+  if (String(p.focus) === 'true') rows = rows.filter(r => focusOf_(r, rules));
+  const items = rows.slice(0, MAX_ROWS).map(r => toItem_(r, rules));
+  const res = { count: rows.length, returned: items.length, conditions: describe_(p), items: items,
+                focus_count: rows.filter(r => focusOf_(r, rules)).length };
+  // 一覧に載っていない集中会場（表彰式・大会など）も、期間内なら別枠で返す
+  if (String(p.focus) === 'true') res.focus_unlisted = unlistedFocus_(ss, rules, p);
   if (p.format === 'pdf') {
-    const file = makePdf_(ss, rows, res.conditions);
+    const file = makePdf_(ss, rows, res.conditions, rules);
     res.pdf_url = file.getUrl();
     res.pdf_name = file.getName();
   }
@@ -283,23 +293,27 @@ function filterRows_(rows, p) {
   });
 }
 
-function toItem_(r) {
+function toItem_(r, rules) {
   const t = String(r[1]).split('\n');
+  const f = rules ? focusOf_(r, rules) : null;
   return { seminar_id: seminarId_(r), date: r[0], start: t[0] || '', end: t[1] || '', type: r[2], lecturer: r[3],
-           pref: r[4], venue: r[5], organizer: r[6], canceled: String(r[5]).indexOf('（中止）') >= 0 };
+           pref: r[4], venue: r[5], organizer: r[6], canceled: String(r[5]).indexOf('（中止）') >= 0,
+           focus: !!f, mark: f ? '🔥' : '', focus_note: f ? f['内容'] : '' };
 }
 
-function makePdf_(ss, rows, title) {
+function makePdf_(ss, rows, title, rules) {
   const esc = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const body = rows.map(r => '<tr>' + [r[0], esc(r[1]).replace('\n', '<br>'), r[2], r[3], r[4], r[5], r[6]]
+  const hot = r => rules && focusOf_(r, rules);  // 集中会場は日付の前に🔥、行をオレンジに
+  const body = rows.map(r => '<tr' + (hot(r) ? ' class="f"' : '') + '>' + [(hot(r) ? '🔥' : '') + r[0], esc(r[1]).replace('\n', '<br>'), r[2], r[3], r[4], r[5], r[6]]
     .map((v, i) => '<td' + (i === 1 ? ' class="t"' : '') + '>' + (i === 1 ? v : esc(v)) + '</td>').join('') + '</tr>').join('');
   const html = '<html><head><meta charset="utf-8"><style>'
     + 'body{font-family:sans-serif;font-size:9pt}h1{font-size:13pt}'
     + 'table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:3px 4px;vertical-align:middle}'
-    + 'th{background:#eee}td.t{text-align:center;white-space:nowrap}</style></head><body>'
+    + 'th{background:#eee}td.t{text-align:center;white-space:nowrap}tr.f td{background:#ffe0b2}</style></head><body>'
     + '<h1>全厚済セミナー一覧（' + esc(title) + '）</h1>'
     + '<p>' + rows.length + '件　作成：' + Utilities.formatDate(new Date(), TZ, 'yyyy/MM/dd HH:mm') + '</p>'
-    + '<table><tr>' + HEADERS.map(h => '<th>' + h + '</th>').join('') + '</tr>' + body + '</table></body></html>';
+    + '<table><tr>' + HEADERS.map(h => '<th>' + h + '</th>').join('') + '</tr>' + body + '</table>'
+    + (rules && rows.some(hot) ? '<p>🔥＝集中会場（絶対行くべき回）</p>' : '') + '</body></html>';
   const name = 'セミナー一覧_' + title.replace(/[\\\/:*?"<>|\s]/g, '_') + '_'
     + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd_HHmm') + '.pdf';
   const blob = Utilities.newBlob(html, 'text/html', 'list.html').getAs(MimeType.PDF).setName(name);
@@ -315,6 +329,7 @@ function describe_(p) {
   if (p.lecturer) parts.push('講師:' + p.lecturer);
   if (p.venue) parts.push('会場:' + p.venue);
   if (String(p.include_canceled) === 'false') parts.push('中止除く');
+  if (String(p.focus) === 'true') parts.push('🔥集中会場');
   return parts.length ? parts.join('・') : '全件';
 }
 
@@ -366,6 +381,7 @@ function chatgptSettings() {
       { name: 'from', in: 'query', schema: { type: 'string' }, description: '開始日 yyyy/mm/dd（monthと併用しない）' },
       { name: 'to', in: 'query', schema: { type: 'string' }, description: '終了日 yyyy/mm/dd（monthと併用しない）' },
       { name: 'lecturer', in: 'query', schema: { type: 'string' }, description: '講師名（部分一致）' },
+      { name: 'focus', in: 'query', schema: { type: 'string' }, description: 'true で集中会場（🔥）だけ。結果の focus=true の回には🔥を付けて表示する' },
       { name: 'venue', in: 'query', schema: { type: 'string' }, description: '会場名（部分一致）' },
       { name: 'include_canceled', in: 'query', schema: { type: 'string', enum: ['true', 'false'] }, description: '中止の回を含めるか。既定 true' },
       { name: 'format', in: 'query', schema: { type: 'string', enum: ['json', 'pdf'] }, description: 'pdf を指定するとPDFを作成しURLを返す' },
@@ -392,6 +408,89 @@ function chatgptSettings() {
   sh.getRange('B3:B5').setWrap(true).setVerticalAlignment('top');
   sh.setColumnWidth(1, 160);
   sh.setColumnWidth(2, 700);
+}
+
+// ===== 集中会場（絶対行くべき回に🔥を付ける） =====
+// 集中会場シート：開催日｜地域｜講師｜種別｜内容。一覧の回と「同じ日・同じ地域・講師（または種別）が合う」時に🔥。
+// 「集中会場…csv」を取り込み待ちに置くとシートを丸ごと入れ替える。
+const FOCUS_SHEET = '集中会場';
+const FOCUS_HEADERS = ['開催日', '地域', '講師', '種別', '内容'];
+const FOCUS_REGIONS = { '大阪': ['大阪府'], '名古屋岐阜': ['愛知県', '岐阜県'], '名古屋': ['愛知県'], '岐阜': ['岐阜県'], '福岡': ['福岡県'] };
+
+function focusSheet_(ss) {
+  let sh = ss.getSheetByName(FOCUS_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(FOCUS_SHEET);
+    sh.getRange(1, 1, 1, FOCUS_HEADERS.length).setValues([FOCUS_HEADERS]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+function readFocus_(ss) {
+  const sh = ss.getSheetByName(FOCUS_SHEET);
+  if (!sh || sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, FOCUS_HEADERS.length).getDisplayValues()
+    .filter(r => r[0])
+    .map(r => FOCUS_HEADERS.reduce((o, h, i) => (o[h] = String(r[i]).trim(), o), {}));
+}
+
+function importFocus_(ss, file) {
+  const csv = Utilities.parseCsv(file.getBlob().getDataAsString('UTF-8'))
+    .filter(l => l.length >= 2 && l[0] && l[0] !== FOCUS_HEADERS[0])
+    .map(l => FOCUS_HEADERS.map((h, i) => i === 0 && parseDate_(l[0]) ? formatDate_(parseDate_(l[0])) : String(l[i] || '').trim()));
+  const sh = focusSheet_(ss);
+  if (sh.getLastRow() >= 2) sh.getRange(2, 1, sh.getLastRow() - 1, FOCUS_HEADERS.length).clearContent();
+  if (csv.length) sh.getRange(2, 1, csv.length, FOCUS_HEADERS.length).setNumberFormat('@').setValues(csv);
+  sortAndFormat_(ss);  // 一覧の色もすぐ塗り直す
+}
+
+// 一覧の1行が集中会場なら、その集中会場の行を返す
+function focusOf_(r, rules) {
+  const d = parseDate_(r[0]);
+  if (!d || !rules.length) return null;
+  const day = formatDate_(d);
+  const lec = String(r[3]).replace(/\s/g, '');
+  return rules.filter(f => {
+    const fd = parseDate_(f['開催日']);
+    if (!fd || formatDate_(fd) !== day) return false;
+    const prefs = FOCUS_REGIONS[f['地域']] || splitList_(f['地域']);
+    if (prefs.length && !prefs.some(x => String(r[4]).indexOf(x.replace(/[都道府県]$/, '')) === 0)) return false;
+    const names = splitList_(String(f['講師']).replace(/[・＆&]/g, ','));
+    const types = String(f['種別']).toUpperCase().split(/[\/,、]+/).filter(Boolean);
+    if (!names.length && !types.length) return false;
+    if (names.length && !names.some(n => lec.indexOf(n) >= 0)) return false;
+    if (types.length && types.indexOf(String(r[2]).toUpperCase()) < 0) return false;
+    return true;
+  })[0] || null;
+}
+
+// 期間内で一覧のどの回にも当たらない集中会場
+function unlistedFocus_(ss, rules, p) {
+  const rows = readRows_(getListSheet_(ss));
+  const from = p.month ? monthStart_(p.month) : parseDate_(p.from || '');
+  const to = p.month ? monthEnd_(p.month) : parseDate_(p.to || '');
+  return rules.filter(f => {
+    const d = parseDate_(f['開催日']);
+    if (!d || (from && d < from) || (to && d > to)) return false;
+    return !rows.some(r => focusOf_(r, [f]));
+  }).map(f => ({ date: f['開催日'], region: f['地域'], lecturer: f['講師'], type: f['種別'], note: f['内容'], mark: '🔥' }));
+}
+
+// 一覧シートの集中会場の行をオレンジにする
+function paintFocus_(ss, sh, rows) {
+  if (!rows.length) return;
+  const rules = readFocus_(ss);
+  sh.getRange(2, 1, rows.length, HEADERS.length)
+    .setBackgrounds(rows.map(r => HEADERS.map(() => focusOf_(r, rules) ? '#ffe0b2' : null)));
+}
+
+// action=focus：集中会場の一覧と、一覧のどの回に当たったか
+function listFocus_(ss) {
+  const rules = readFocus_(ss);
+  const rows = readRows_(getListSheet_(ss));
+  return { count: rules.length, focus: rules.map(f => ({ date: f['開催日'], region: f['地域'], lecturer: f['講師'], type: f['種別'], note: f['内容'],
+    matched: rows.filter(r => focusOf_(r, [f])).map(r => toItem_(r, null)) })) };
 }
 /**
  * 全厚済セミナー：参加者管理（「コード.gs」と同じプロジェクトに追加するファイル）
