@@ -418,8 +418,8 @@ function makeCalendarPdf_(ss, rows, title, lecturers) {
     + 'div.dn{font-weight:bold;font-size:9pt;color:#333}td.su div.dn{color:#c0392b}td.sa div.dn{color:#2a62b8}'
     + 'div.ev{border:1px solid #c9d6e3;border-radius:4px;background:#f3f7fb;margin:2px 0 3px;padding:2px;text-align:center}'
     + 'div.ev.cx{border:1px dashed #c0392b}div.ev.cx div.tm,div.ev.cx div.nm,div.ev.cx div.vn{color:#999}div.ph{margin:1px 0}'
-    + 'img.f1{width:64px;height:64px;border-radius:6px}img.f2{width:40px;height:40px;border-radius:5px;margin:0 1px}'
-    + 'div.tm{font-size:6.8pt}b.ty{color:#2f4f6f}b.cl{color:#b03a3a}div.nm{font-weight:bold;font-size:7pt;line-height:1.25}div.vn{font-size:6pt;color:#555}'
+    + 'img.f1{width:44px;height:44px;border-radius:5px}img.f2{width:32px;height:32px;border-radius:4px;margin:0 1px}'
+    + 'div.tm{font-size:8pt}b.ty{color:#2f4f6f}b.cl{color:#b03a3a}div.nm{font-weight:bold;font-size:8.5pt;line-height:1.25}div.vn{font-size:7pt;color:#444;line-height:1.2}'
     + '</style></head><body>' + (pages || '<p>該当するセミナーはありません。</p>') + '</body></html>';
   const name = 'セミナーカレンダー_' + title.replace(/[\\\/:*?"<>|\s]/g, '_') + '_'
     + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd_HHmm') + '.pdf';
