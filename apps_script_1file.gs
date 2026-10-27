@@ -445,6 +445,7 @@ function chatgptSettings() {
   sh.setColumnWidth(1, 160);
   sh.setColumnWidth(2, 700);
 }
+
 /**
  * 全厚済セミナー：参加者管理（「コード.gs」と同じプロジェクトに追加するファイル）
  *
