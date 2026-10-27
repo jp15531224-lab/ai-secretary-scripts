@@ -46,6 +46,7 @@ const WEEK = ['日', '月', '火', '水', '木', '金', '土'];
 const PDF_FOLDER = 'PDF出力';
 const GPT_SHEET_NAME = 'ChatGPT設定';
 const MAX_ROWS = 300;           // 1回の応答で返す最大件数
+const LECTURER_SHEET_NAME = '講師';  // 講師名・都道府県・表示名・一言・写真ファイルID（講師一覧のスクショから登録）
 
 function setup() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -255,13 +256,15 @@ function doGet(e) {
   const rules = readFocus_(ss);
   let rows = filterRows_(readRows_(getListSheet_(ss)), p);
   if (String(p.focus) === 'true') rows = rows.filter(r => focusOf_(r, rules));
-  const items = rows.slice(0, MAX_ROWS).map(r => toItem_(r, rules));
+  const lecturers = lecturerMap_(ss);
+  const items = rows.slice(0, MAX_ROWS).map(r => toItem_(r, lecturers, rules));
   const res = { count: rows.length, returned: items.length, conditions: describe_(p), items: items,
                 focus_count: rows.filter(r => focusOf_(r, rules)).length };
   // 一覧に載っていない集中会場（表彰式・大会など）も、期間内なら別枠で返す
   if (String(p.focus) === 'true') res.focus_unlisted = unlistedFocus_(ss, rules, p);
-  if (p.format === 'pdf') {
-    const file = makePdf_(ss, rows, res.conditions, rules);
+  if (p.format === 'pdf' || p.format === 'calendar') {
+    const file = p.format === 'calendar' ? makeCalendarPdf_(ss, rows, res.conditions, lecturers, rules)
+      : makePdf_(ss, rows, res.conditions, lecturers, rules);
     res.pdf_url = file.getUrl();
     res.pdf_name = file.getName();
   }
@@ -290,23 +293,72 @@ function filterRows_(rows, p) {
   });
 }
 
-function toItem_(r, rules) {
+function toItem_(r, lecturers, rules) {
   const t = String(r[1]).split('\n');
   const f = rules ? focusOf_(r, rules) : null;
   return { seminar_id: seminarId_(r), date: r[0], start: t[0] || '', end: t[1] || '', type: r[2], lecturer: r[3],
+           lecturer_info: lecturersOf_(r[3], lecturers || {}).map(l => ({ display: l.display, motto: l.motto })),
            pref: r[4], venue: r[5], organizer: r[6], canceled: String(r[5]).indexOf('（中止）') >= 0,
            focus: !!f, mark: f ? '🔥' : '', focus_note: f ? f['内容'] : '' };
 }
 
-function makePdf_(ss, rows, title, rules) {
+// ===== 講師（「講師」シート） =====
+// 一覧の講師名（「林田 啓明、大坪 仁」のような複数人や「小林 智子（群馬県）」も可）を1人ずつ講師シートと照らし合わせる。
+// 講師シートに無い人は名前だけを返す（推測で他の人の写真を付けない）。
+
+function lecturerKey_(name) {
+  return String(name || '').replace(/（[^）]*）|\([^)]*\)/g, '').replace(/[\s　]/g, '');
+}
+
+function lecturerMap_(ss) {
+  const sh = ss.getSheetByName(LECTURER_SHEET_NAME);
+  const map = {};
+  if (!sh || sh.getLastRow() < 2) return map;
+  sh.getRange(2, 1, sh.getLastRow() - 1, 5).getDisplayValues().forEach(r => {
+    if (!r[0]) return;
+    map[lecturerKey_(r[0])] = { name: r[0], pref: r[1], display: r[2] || lecturerKey_(r[0]) + (r[1] ? '（' + r[1] + '）' : ''),
+                               motto: r[3], photo: r[4] };
+  });
+  return map;
+}
+
+function lecturersOf_(text, map) {
+  return String(text || '').split(/[、,，]/).map(n => n.trim()).filter(Boolean)
+    .map(n => map[lecturerKey_(n)] || { name: n, display: n, motto: '', photo: '' });
+}
+
+// 写真はドライブの非公開ファイルのまま、PDFに埋め込む（共有設定は変えない）
+function lecturerPhoto_(id, cache) {
+  if (!id) return '';
+  if (!(id in cache)) {
+    try {
+      const b = DriveApp.getFileById(id).getBlob();
+      cache[id] = 'data:' + b.getContentType() + ';base64,' + Utilities.base64Encode(b.getBytes());
+    } catch (err) {
+      cache[id] = '';
+    }
+  }
+  return cache[id];
+}
+
+function makePdf_(ss, rows, title, lecturers, rules) {
+  const hot = r => rules && focusOf_(r, rules);  // 集中会場は日付の前に🔥
   const esc = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const hot = r => rules && focusOf_(r, rules);  // 集中会場は日付の前に🔥、行をオレンジに
-  const body = rows.map(r => '<tr' + (hot(r) ? ' class="f"' : '') + '>' + [(hot(r) ? '🔥' : '') + r[0], esc(r[1]).replace('\n', '<br>'), r[2], r[3], r[4], r[5], r[6]]
-    .map((v, i) => '<td' + (i === 1 ? ' class="t"' : '') + '>' + (i === 1 ? v : esc(v)) + '</td>').join('') + '</tr>').join('');
+  const photos = {};
+  // 講師欄：写真を名前の横、一言を名前の下に
+  const lecturerCell = text => lecturersOf_(text, lecturers || lecturerMap_(ss)).map(l => {
+    const src = lecturerPhoto_(l.photo, photos);
+    return '<table class="l"><tr><td class="lp">' + (src ? '<img src="' + src + '">' : '') + '</td><td>'
+      + '<b>' + esc(l.display) + '</b>' + (l.motto ? '<br><span class="m">' + esc(l.motto) + '</span>' : '') + '</td></tr></table>';
+  }).join('');
+  const body = rows.map(r => '<tr>' + [(hot(r) ? '🔥' : '') + r[0], esc(r[1]).replace('\n', '<br>'), r[2], lecturerCell(r[3]), r[4], r[5], r[6]]
+    .map((v, i) => '<td' + (i === 1 ? ' class="t"' : i === 3 ? ' class="lc"' : '') + '>' + (i === 1 || i === 3 ? v : esc(v)) + '</td>').join('') + '</tr>').join('');
   const html = '<html><head><meta charset="utf-8"><style>'
     + 'body{font-family:sans-serif;font-size:9pt}h1{font-size:13pt}'
     + 'table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:3px 4px;vertical-align:middle}'
-    + 'th{background:#eee}td.t{text-align:center;white-space:nowrap}tr.f td{background:#ffe0b2}</style></head><body>'
+    + 'th{background:#eee}td.t{text-align:center;white-space:nowrap}td.lc{width:34%}'
+    + 'table.l{width:100%;border:none}table.l td{border:none;padding:1px 2px}td.lp{width:40px}td.lp img{width:38px;height:38px;border-radius:4px}'
+    + 'span.m{font-size:7.5pt;color:#555}</style></head><body>'
     + '<h1>全厚済セミナー一覧（' + esc(title) + '）</h1>'
     + '<p>' + rows.length + '件　作成：' + Utilities.formatDate(new Date(), TZ, 'yyyy/MM/dd HH:mm') + '</p>'
     + '<table><tr>' + HEADERS.map(h => '<th>' + h + '</th>').join('') + '</tr>' + body + '</table>'
@@ -314,6 +366,87 @@ function makePdf_(ss, rows, title, rules) {
   const name = 'セミナー一覧_' + title.replace(/[\\\/:*?"<>|\s]/g, '_') + '_'
     + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd_HHmm') + '.pdf';
   const blob = Utilities.newBlob(html, 'text/html', 'list.html').getAs(MimeType.PDF).setName(name);
+  return getSubFolder_(ss, PDF_FOLDER).createFile(blob);
+}
+
+// 種別ごとの色（カードの枠と種別の文字に使う）。ここに無い種別は灰色。
+const TYPE_COLORS = { PBS: '#d9480f', BE: '#1c6dd0', BT: '#2b8a3e', BS: '#8e44ad', 'コンベンション': '#b8860b' };
+const typeColor_ = t => TYPE_COLORS[String(t).toUpperCase()] || TYPE_COLORS[String(t)] || '#666666';
+
+// カレンダー形式のPDF（format=calendar）。月ごとに1ページ、日曜はじまり。
+// 1回ごとに講師の顔写真を大きく出し、その下に時間・種別・講師名（都道府県）・会場を書く。一言は一覧PDFの方に載せる。
+function makeCalendarPdf_(ss, rows, title, lecturers, rules) {
+  const esc = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const map = lecturers || lecturerMap_(ss);
+  const photos = {};
+  const byDay = {};
+  rows.forEach(r => {
+    const d = parseDate_(r[0]);
+    if (!d) return;
+    const k = Utilities.formatDate(d, TZ, 'yyyyMMdd');
+    (byDay[k] = byDay[k] || []).push(r);
+  });
+  const months = Object.keys(byDay).map(k => k.slice(0, 6)).filter((m, i, a) => a.indexOf(m) === i).sort();
+
+  const card = r => {
+    const t = String(r[1]).split('\n');
+    const ls = lecturersOf_(r[3], map);
+    const canceled = String(r[5]).indexOf('（中止）') >= 0;
+    const imgs = ls.map(l => {
+      const src = lecturerPhoto_(l.photo, photos);
+      return src ? '<img class="' + (ls.length > 1 ? 'f2' : 'f1') + '" src="' + src + '">' : '';
+    }).join('');
+    const c = typeColor_(r[2]);
+    return '<div class="ev' + (canceled ? ' cx' : '') + '" style="border-color:' + c + '">'
+      + (imgs ? '<div class="ph">' + imgs + '</div>' : '')
+      + '<div class="tm">' + (rules && focusOf_(r, rules) ? '🔥' : '') + esc(t[0] || '') + (t[1] ? '〜' + esc(t[1]) : '') + ' <b class="ty" style="color:' + c + '">' + esc(r[2]) + '</b>'
+      + (canceled ? ' <b class="cl">中止</b>' : '') + '</div>'
+      + '<div class="nm">' + ls.map(l => esc(l.display)).join('<br>') + '</div>'
+      + '<div class="vn">' + esc(String(r[4]).replace(/[都道府県]$/, '')) + '・' + esc(String(r[5]).replace('（中止）', '')) + '</div>'
+      + '</div>';
+  };
+
+  const pages = months.map((ym, mi) => {
+    const y = Number(ym.slice(0, 4)), m = Number(ym.slice(4, 6));
+    const first = new Date(y, m - 1, 1), days = new Date(y, m, 0).getDate();
+    const cells = [];
+    for (let i = 0; i < first.getDay(); i++) cells.push('<td class="em"></td>');
+    for (let day = 1; day <= days; day++) {
+      const dow = (first.getDay() + day - 1) % 7;
+      const evs = byDay[ym + ('0' + day).slice(-2)] || [];
+      cells.push('<td class="dy' + (dow === 0 ? ' su' : dow === 6 ? ' sa' : '') + (evs.length ? '' : ' no') + '">'
+        + '<div class="dn">' + day + '</div>' + evs.map(card).join('') + '</td>');
+    }
+    while (cells.length % 7) cells.push('<td class="em"></td>');
+    let body = '';
+    for (let i = 0; i < cells.length; i += 7) body += '<tr>' + cells.slice(i, i + 7).join('') + '</tr>';
+    const types = [];
+    Object.keys(byDay).filter(k => k.slice(0, 6) === ym)
+      .forEach(k => byDay[k].forEach(r => { if (types.indexOf(r[2]) < 0) types.push(r[2]); }));
+    const legend = types.map(t => '<b style="color:' + typeColor_(t) + '">■' + esc(t) + '</b>').join('　');
+    const count = Object.keys(byDay).filter(k => k.slice(0, 6) === ym).reduce((n, k) => n + byDay[k].length, 0);
+    return '<div class="pg"' + (mi ? ' style="page-break-before:always"' : '') + '>'
+      + '<h1>' + y + '年' + m + '月　<span class="sub">全厚済セミナー（' + esc(title) + '）' + count + '件</span>　<span class="lg">' + legend + '</span></h1>'
+      + '<table class="cal"><tr>' + WEEK.map((w, i) => '<th class="' + (i === 0 ? 'su' : i === 6 ? 'sa' : '') + '">' + w + '</th>').join('') + '</tr>'
+      + body + '</table></div>';
+  }).join('');
+
+  const html = '<html><head><meta charset="utf-8"><style>'
+    + 'body{font-family:sans-serif;font-size:7pt;margin:0}h1{font-size:15pt;margin:0 0 6px}span.sub{font-size:8.5pt;color:#555;font-weight:normal}'
+    + 'table.cal{border-collapse:collapse;width:100%;table-layout:fixed}table.cal tr{page-break-inside:avoid}div.ev{page-break-inside:avoid}'
+    // Google の PDF 変換ではセルの背景色が出ないため、見出し・中止は文字色と罫線で区別する
+    + 'table.cal th{color:#2f4f6f;font-size:10pt;font-weight:bold;padding:3px;border:1px solid #bbb;border-bottom:3px solid #2f4f6f}'
+    + 'table.cal th.su{color:#c0392b;border-bottom-color:#c0392b}table.cal th.sa{color:#2a62b8;border-bottom-color:#2a62b8}'
+    + 'table.cal td{border:1px solid #bbb;vertical-align:top;padding:2px;height:62px}td.em{background:#f4f4f4}td.no{background:#fbfbfb}'
+    + 'div.dn{font-weight:bold;font-size:9pt;color:#333}td.su div.dn{color:#c0392b}td.sa div.dn{color:#2a62b8}'
+    + 'div.ev{border:2px solid #999;border-top-width:5px;border-radius:4px;margin:2px 0 3px;padding:2px;text-align:center}'
+    + 'div.ev.cx{border-style:dashed}span.lg{font-size:10pt}div.ev.cx div.tm,div.ev.cx div.nm,div.ev.cx div.vn{color:#999}div.ph{margin:1px 0}'
+    + 'img.f1{width:44px;height:44px;border-radius:5px}img.f2{width:32px;height:32px;border-radius:4px;margin:0 1px}'
+    + 'div.tm{font-size:8pt}b.ty{font-size:9pt}b.cl{color:#b03a3a}div.nm{font-weight:bold;font-size:8.5pt;line-height:1.25}div.vn{font-size:7pt;color:#444;line-height:1.2}'
+    + '</style></head><body>' + (pages || '<p>該当するセミナーはありません。</p>') + '</body></html>';
+  const name = 'セミナーカレンダー_' + title.replace(/[\\\/:*?"<>|\s]/g, '_') + '_'
+    + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd_HHmm') + '.pdf';
+  const blob = Utilities.newBlob(html, 'text/html', 'calendar.html').getAs(MimeType.PDF).setName(name);
   return getSubFolder_(ss, PDF_FOLDER).createFile(blob);
 }
 
@@ -381,7 +514,7 @@ function chatgptSettings() {
       { name: 'focus', in: 'query', schema: { type: 'string' }, description: 'true で集中会場（🔥）だけ。結果の focus=true の回には🔥を付けて表示する' },
       { name: 'venue', in: 'query', schema: { type: 'string' }, description: '会場名（部分一致）' },
       { name: 'include_canceled', in: 'query', schema: { type: 'string', enum: ['true', 'false'] }, description: '中止の回を含めるか。既定 true' },
-      { name: 'format', in: 'query', schema: { type: 'string', enum: ['json', 'pdf'] }, description: 'pdf を指定するとPDFを作成しURLを返す' },
+      { name: 'format', in: 'query', schema: { type: 'string', enum: ['json', 'pdf', 'calendar'] }, description: 'pdf=一覧表のPDF、calendar=顔写真入りカレンダーのPDF。作成しURLを返す' },
     ],
     responses: { '200': { description: '検索結果' } },
   } };
@@ -390,12 +523,13 @@ function chatgptSettings() {
     'あなたはJPの秘書です。全厚済セミナーの予定を seminarApi アクションで調べて答えます。',
     '・「PBSだけ」「大阪だけ」「12月」「来月」などの条件を type / pref / month に変換して呼び出す。月は今日の日付から yyyy-mm に直す。',
     '・「1月」のように月だけ言われたら、今日以降で一番近いその月（例：今が2026年10月なら2027年1月）として扱う。',
-    '・「PDFにして」「PDFで」と言われたら format=pdf で呼び出し、返ってきた pdf_url を伝える。',
+    '・「PDFにして」「PDFで」と言われたら format=pdf で呼び出し、返ってきた pdf_url を伝える。「カレンダーで」「カレンダーに落とし込んで」なら format=calendar（顔写真入りの月間カレンダーPDF）。自分でカレンダーを作り直さない。',
     '・回答の並びは必ず「開催日｜時間（開始〜終了）｜種別｜講師名｜都道府県｜会場｜主催者」。',
     '・音声で読み上げるときは、件数を先に言い、そのあと日付順に「日付・時間・講師・会場」を簡潔に読む。10件を超えるときは最初の10件を読み、残りは画面のリストかPDFを案内する。',
     '・中止の回（canceled=true）は必ず「中止」と伝える。',
     '・会場名の「…※」は元画面で名前が切れている印。推測で補わない。',
     '・データに無いことは推測せず「一覧に無い」と答える。',
+    '・講師は lecturer_info の display（例：青木弘幸（群馬県））で示し、motto（一言）があれば名前の下に添える。lecturer_info に無い情報は補わない。',
   ].join('\n') + attendanceInstructions_();
   sh.getRange('A3:B5').setValues([
     ['使い方', 'ChatGPT → GPTを作成 → 構成：「指示」にB4、アクション →「スキーマ」にB5を貼る（認証：なし）'],
@@ -487,5 +621,5 @@ function listFocus_(ss) {
   const rules = readFocus_(ss);
   const rows = readRows_(getListSheet_(ss));
   return { count: rules.length, focus: rules.map(f => ({ date: f['開催日'], region: f['地域'], lecturer: f['講師'], type: f['種別'], note: f['内容'],
-    matched: rows.filter(r => focusOf_(r, [f])).map(r => toItem_(r, null)) })) };
+    matched: rows.filter(r => focusOf_(r, [f])).map(r => toItem_(r, null, null)) })) };
 }
