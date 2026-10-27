@@ -299,7 +299,7 @@ function filterRows_(rows, p) {
 function toItem_(r, lecturers, rules) {
   const t = String(r[1]).split('\n');
   const f = rules ? focusOf_(r, rules) : null;
-  return { seminar_id: seminarId_(r), date: r[0], start: t[0] || '', end: t[1] || '', type: r[2], lecturer: r[3],
+  return { seminar_id: seminarId_(r), date: r[0] + (f ? '🔥' : ''), start: t[0] || '', end: t[1] || '', type: r[2], lecturer: r[3],
            lecturer_info: lecturersOf_(r[3], lecturers || {}).map(l => ({ display: l.display, motto: l.motto })),
            pref: r[4], venue: r[5], organizer: r[6], canceled: String(r[5]).indexOf('（中止）') >= 0,
            focus: !!f, mark: f ? '🔥' : '', focus_note: f ? f['内容'] : '' };
@@ -345,7 +345,7 @@ function lecturerPhoto_(id, cache) {
 }
 
 function makePdf_(ss, rows, title, lecturers, rules) {
-  const hot = r => rules && focusOf_(r, rules);  // 集中会場は日付の前に🔥
+  const hot = r => rules && focusOf_(r, rules);  // 集中会場は日付の横に🔥
   const esc = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const photos = {};
   // 講師欄：写真を名前の横、一言を名前の下に
@@ -354,7 +354,7 @@ function makePdf_(ss, rows, title, lecturers, rules) {
     return '<table class="l"><tr><td class="lp">' + (src ? '<img src="' + src + '">' : '') + '</td><td>'
       + '<b>' + esc(l.display) + '</b>' + (l.motto ? '<br><span class="m">' + esc(l.motto) + '</span>' : '') + '</td></tr></table>';
   }).join('');
-  const body = rows.map(r => '<tr>' + [(hot(r) ? '🔥' : '') + r[0], esc(r[1]).replace('\n', '<br>'), r[2], lecturerCell(r[3]), r[4], r[5], r[6]]
+  const body = rows.map(r => '<tr>' + [r[0] + (hot(r) ? '🔥' : ''), esc(r[1]).replace('\n', '<br>'), r[2], lecturerCell(r[3]), r[4], r[5], r[6]]
     .map((v, i) => '<td' + (i === 1 ? ' class="t"' : i === 3 ? ' class="lc"' : '') + '>' + (i === 1 || i === 3 ? v : esc(v)) + '</td>').join('') + '</tr>').join('');
   const html = '<html><head><meta charset="utf-8"><style>'
     + 'body{font-family:sans-serif;font-size:9pt}h1{font-size:13pt}'
@@ -418,7 +418,7 @@ function makeCalendarPdf_(ss, rows, title, lecturers, rules) {
       const dow = (first.getDay() + day - 1) % 7;
       const evs = byDay[ym + ('0' + day).slice(-2)] || [];
       cells.push('<td class="dy' + (dow === 0 ? ' su' : dow === 6 ? ' sa' : '') + (evs.length ? '' : ' no') + '">'
-        + '<div class="dn">' + day + '</div>' + evs.map(card).join('') + '</td>');
+        + '<div class="dn">' + day + (rules && evs.some(r => focusOf_(r, rules)) ? '🔥' : '') + '</div>' + evs.map(card).join('') + '</td>');
     }
     while (cells.length % 7) cells.push('<td class="em"></td>');
     let body = '';
@@ -611,12 +611,13 @@ function unlistedFocus_(ss, rules, p) {
   }).map(f => ({ date: f['開催日'], region: f['地域'], lecturer: f['講師'], type: f['種別'], note: f['内容'], mark: '🔥' }));
 }
 
-// 一覧シートの集中会場の行をオレンジにする
+// 一覧シートの集中会場の行は、開催日の横に🔥を付けてオレンジにする（読む時は🔥を外すので検索・重複判定には影響しない）
 function paintFocus_(ss, sh, rows) {
   if (!rows.length) return;
   const rules = readFocus_(ss);
-  sh.getRange(2, 1, rows.length, HEADERS.length)
-    .setBackgrounds(rows.map(r => HEADERS.map(() => focusOf_(r, rules) ? '#ffe0b2' : null)));
+  const hot = rows.map(r => !!focusOf_(r, rules));
+  sh.getRange(2, 1, rows.length, 1).setValues(rows.map((r, i) => [r[0] + (hot[i] ? '🔥' : '')]));
+  sh.getRange(2, 1, rows.length, HEADERS.length).setBackgrounds(hot.map(h => HEADERS.map(() => h ? '#ffe0b2' : null)));
 }
 
 // action=focus：集中会場の一覧と、一覧のどの回に当たったか
