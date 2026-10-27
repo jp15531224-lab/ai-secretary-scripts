@@ -411,11 +411,13 @@ function makeCalendarPdf_(ss, rows, title, lecturers) {
   const html = '<html><head><meta charset="utf-8"><style>'
     + 'body{font-family:sans-serif;font-size:7pt;margin:0}h1{font-size:15pt;margin:0 0 6px}span.sub{font-size:8.5pt;color:#555;font-weight:normal}'
     + 'table.cal{border-collapse:collapse;width:100%;table-layout:fixed}table.cal tr{page-break-inside:avoid}div.ev{page-break-inside:avoid}'
-    + 'table.cal th{background:#2f4f6f;color:#fff;font-size:8pt;padding:3px}table.cal th.su{background:#b03a3a}table.cal th.sa{background:#2f5fa0}'
+    // Google の PDF 変換ではセルの背景色が出ないため、見出し・中止は文字色と罫線で区別する
+    + 'table.cal th{color:#2f4f6f;font-size:10pt;font-weight:bold;padding:3px;border:1px solid #bbb;border-bottom:3px solid #2f4f6f}'
+    + 'table.cal th.su{color:#c0392b;border-bottom-color:#c0392b}table.cal th.sa{color:#2a62b8;border-bottom-color:#2a62b8}'
     + 'table.cal td{border:1px solid #bbb;vertical-align:top;padding:2px;height:62px}td.em{background:#f4f4f4}td.no{background:#fbfbfb}'
     + 'div.dn{font-weight:bold;font-size:9pt;color:#333}td.su div.dn{color:#c0392b}td.sa div.dn{color:#2a62b8}'
     + 'div.ev{border:1px solid #c9d6e3;border-radius:4px;background:#f3f7fb;margin:2px 0 3px;padding:2px;text-align:center}'
-    + 'div.ev.cx{background:#eee;color:#888;border-color:#ccc}div.ph{margin:1px 0}'
+    + 'div.ev.cx{border:1px dashed #c0392b}div.ev.cx div.tm,div.ev.cx div.nm,div.ev.cx div.vn{color:#999}div.ph{margin:1px 0}'
     + 'img.f1{width:64px;height:64px;border-radius:6px}img.f2{width:40px;height:40px;border-radius:5px;margin:0 1px}'
     + 'div.tm{font-size:6.8pt}b.ty{color:#2f4f6f}b.cl{color:#b03a3a}div.nm{font-weight:bold;font-size:7pt;line-height:1.25}div.vn{font-size:6pt;color:#555}'
     + '</style></head><body>' + (pages || '<p>該当するセミナーはありません。</p>') + '</body></html>';
